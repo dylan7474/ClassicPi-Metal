@@ -119,7 +119,10 @@ the screen rows that changed.
 4. **On-screen disk switcher:** pick a `.dsk` from the card with a hot-key overlay. This needs umac's eject and insert path.
 5. **Second drive:** umac has two drive slots, but only one is wired up so far.
 6. **VIA timers:** missing in umac, so some games run too fast.
-7. **The ClassicPi case** with a Zero 2 W inside.
+7. **Real floppy drive.** Two levels:
+   - *USB floppy drive (cheap, easiest).* These read only 1.44 MB MFM disks, and Circle seems to support only bulk-only USB storage (`umsd`), while many floppy drives use the older CBI protocol, so **check a drive before buying**. A Mac Plus can't read 1.44 MB disks itself, but umac's disk driver doesn't care, so an HFS 1.44 MB floppy (written by a later Mac or a PC tool) could be mounted as the second drive.
+   - *Original 400K/800K Mac disks.* These are GCR, recorded at varying speeds, and a USB floppy drive can't read them at all. That needs a flux reader (Greaseweazle, FluxEngine or Applesauce) with a real 3.5" drive: read the flux, decode GCR to a disk image, then mount it. It's a bigger job, but it would let the Pi boot genuine old Mac floppies.
+8. **The ClassicPi case** with a Zero 2 W inside, and a floppy slot.
 
 ## Licence
 

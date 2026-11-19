@@ -1,0 +1,17 @@
+# ClassicPi-Metal - Raspberry Pi Zero 2 W (also Pi 3 / 3+)
+arm_64bit=1
+kernel_address=0x80000
+kernel=kernel8.img
+initial_turbo=0
+
+# HDMI: the Mac picture is scaled by a whole number and centred.
+# 1024x768 gives a 2x Mac (1024x684) with thin black bars.
+# Remove these two lines to use the screen's own preferred mode.
+hdmi_group=2
+hdmi_mode=16
+
+# Keep HDMI on even if the screen is switched on after the Pi
+hdmi_force_hotplug=1
+
+# Smallest GPU memory share: the Mac needs none
+gpu_mem=16

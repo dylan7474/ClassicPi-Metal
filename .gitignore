@@ -1,0 +1,19 @@
+# Build output
+build/
+*.o
+*.d
+*.elf
+*.img
+*.map
+*.lst
+
+# Apple ROMs and Mac disk images: copyrighted, never commit
+*.rom
+*.ROM
+*.dsk
+*.DSK
+*.hfv
+*.image
+
+# Your own SD card extras (ROM, disks)
+local/

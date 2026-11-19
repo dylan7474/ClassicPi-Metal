@@ -1,7 +1,25 @@
-# ClassicPi-Metal - Raspberry Pi Zero 2 W (also Pi 3 / 3+)
+# ClassicPi-Metal - one card, the firmware picks the kernel for the model.
+#   Pi Zero / Zero W / Pi 1   -> kernel.img   (32-bit, ARMv6)
+#   Pi Zero 2 W / Pi 3        -> kernel8.img  (64-bit)
+# Later sections win, so [pi02] overrides [pi0] on a Zero 2 W.
+
+[pi0]
+kernel=kernel.img
+
+[pi1]
+kernel=kernel.img
+
+[pi02]
 arm_64bit=1
 kernel_address=0x80000
 kernel=kernel8.img
+
+[pi3]
+arm_64bit=1
+kernel_address=0x80000
+kernel=kernel8.img
+
+[all]
 initial_turbo=0
 
 # HDMI: the Mac picture is scaled by a whole number and centred.

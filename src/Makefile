@@ -1,15 +1,15 @@
 #
 # Circle kernel Makefile: umac + Musashi + the Circle platform layer.
-# Normally run from the top-level Makefile, which first builds
-# circle-stdlib and generates the Musashi opcode tables into build/gen.
+# Run by the top-level Makefile from a per-target copy, build/<target>/src,
+# with CIRCLESTDLIB, UMAC and GEN pointing at that target's own copies.
 #
 
-CIRCLESTDLIB = ../libs/circle-stdlib
+CIRCLESTDLIB ?= ../circle-stdlib
 include $(CIRCLESTDLIB)/Config.mk
 
-UMAC    = ../external/umac
-MUSASHI = $(UMAC)/external/Musashi
-GEN     = ../build/gen
+UMAC    ?= ../umac
+MUSASHI  = $(UMAC)/external/Musashi
+GEN     ?= ../gen
 
 # Mac RAM in KB: 4096 = 4 MB Mac Plus (System 7 needs 2048 or more)
 MEMSIZE ?= 4096

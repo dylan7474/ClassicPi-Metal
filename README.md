@@ -80,6 +80,19 @@ make            # first run builds circle-stdlib (~2 min), then build/kernel8.im
 make sdcard     # build/sdcard/ = everything for the card except ROM + disk
 ```
 
+### A ready-to-flash card image
+
+```sh
+make sdcard
+tools/make-sdimage.sh                       # uses local/mac.rom + local/disk1.dsk
+tools/make-sdimage.sh my.rom my.dsk out.img # or name them
+```
+
+This makes `build/ClassicPi-Metal.img`, one FAT32 partition with everything
+on it, including your ROM and disk. Flash it with Raspberry Pi Imager
+("Use custom") or `dd`. `local/` is gitignored, so your ROM and disks there
+never get committed.
+
 `make MEMSIZE=1024` builds a 1 MB Mac. System 6 is fine with that; System 7
 needs 2048 or more. The default is 4096.
 

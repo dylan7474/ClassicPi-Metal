@@ -97,6 +97,7 @@ private:
 	bool		m_bTimeDone;		// NTP answered or given up
 	bool		m_bWeb;			// disk-images page on (cmdline web=)
 	u64		m_nNetStart;
+	unsigned	m_nNetYieldUs;		// network turn interval (cmdline netyield=<ms>)
 	char		m_NTPServer[64];	// cmdline.txt ntp=
 	char		m_TimeZone[64];		// cmdline.txt tz= (POSIX TZ)
 	bool		m_bClockDirty;		// PRAM/clock changed, save soon

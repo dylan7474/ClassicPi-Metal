@@ -149,6 +149,7 @@ CKernel::CKernel (void)
 	m_bTimeDone (false),
 	m_bWeb (false),
 	m_nNetStart (0),
+	m_nNetYieldUs (10000),
 	m_bClockDirty (false),
 	m_nClockChanged (0),
 	m_bSDOK (false),
@@ -438,7 +439,8 @@ void CKernel::Fatal (const char *pFormat, ...)
 #define HOSTNAME	"classicpi"
 #define NET_GIVE_UP_US	120000000	// stop the network after 2 min without time
 #define NET_YIELD_US	10000		// network turns every 10 ms while joining + NTP
-#define NET_IDLE_US	50000		// then every 50 ms (web page idle): cheaper for the Mac
+#define NET_HEALTH_US	30000000	// network health line in the log every 30 s ...
+#define NET_HEALTH_FOR	(10 * 60 * 1000000ULL)	// ... for the first 10 minutes
 
 static volatile bool s_bClockChanged;
 
@@ -716,6 +718,13 @@ void CKernel::StartWiFi (void)
 	Log ("%s: joining; the Mac's clock is set from %s when it answers",
 	     bWiFi ? "Wi-Fi" : "Ethernet", m_NTPServer);
 
+	m_nNetYieldUs = mOptions.GetAppOptionDecimal ("netyield", 10);
+	if (m_nNetYieldUs == 0 || m_nNetYieldUs > 1000)
+	{
+		m_nNetYieldUs = 10;
+	}
+	m_nNetYieldUs *= 1000;
+
 	m_bWeb = strcmp (mOptions.GetAppOptionString ("web", "on"), "off") != 0;
 	if (m_bWeb)
 	{
@@ -768,14 +777,30 @@ void CKernel::UpdateNetwork (u64 nNow)
 		return;
 	}
 
-	// A turn for the network tasks: every 10 ms until the clock is set,
-	// then every 50 ms for the web page; every pass while a download or
-	// upload runs (the Mac slows down meanwhile)
+	// A turn for the network tasks every 10 ms (cmdline netyield=<ms>);
+	// every pass while a download or upload runs (the Mac slows down)
 	static u64 nNextYield;
 	if (g_Web.nTransfers > 0 || nNow >= nNextYield)
 	{
 		m_Scheduler.Yield ();
-		nNextYield = CTimer::GetClockTicks64 () + (m_bTimeDone ? NET_IDLE_US : NET_YIELD_US);
+		nNextYield = CTimer::GetClockTicks64 () + m_nNetYieldUs;
+	}
+
+	// Health line for the first minutes (written to the card each time)
+	static u64 nNextHealth = nNow + NET_HEALTH_US;
+	if (nNow >= nNextHealth && nNow - m_nNetStart < NET_HEALTH_FOR)
+	{
+		nNextHealth = nNow + NET_HEALTH_US;
+		CString IP;
+		if (m_pNet != 0 && m_pNet->IsRunning ())
+		{
+			m_pNet->GetConfig ()->GetIPAddress ()->Format (&IP);
+		}
+		Log ("Net:  %s, link %s, IP %s, web requests %u",
+		     m_pNet != 0 && m_pNet->IsRunning () ? "running" : "NOT running",
+		     m_pWLAN != 0 ? (m_pWLAN->IsLinkUp () ? "up" : "DOWN") : "wired",
+		     IP.GetLength () ? (const char *) IP : "-", g_Web.nRequests);
+		FlushBootLog ();
 	}
 
 	if (!m_bTimeDone && (s_bNTPDone || nNow - m_nNetStart > NET_GIVE_UP_US))

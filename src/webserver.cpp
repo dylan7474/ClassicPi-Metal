@@ -668,6 +668,7 @@ void CWebTask::Run (void)
 			CScheduler::Get ()->MsSleep (200);
 			continue;
 		}
+		g_Web.nRequests++;
 		Serve (pClient);
 		delete pClient;			// closes the connection
 	}

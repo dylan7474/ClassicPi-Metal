@@ -23,6 +23,7 @@ struct TWebShared
 	volatile bool	bSynced;		// main -> web: done
 	volatile bool	bRestartRequest;	// web -> main: save, then reboot
 	volatile unsigned nTransfers;		// downloads/uploads running: yield more
+	volatile unsigned nRequests;		// requests served (for the health log)
 };
 
 extern TWebShared g_Web;

@@ -42,6 +42,7 @@ private:
 	void Log (const char *pFormat, ...);	// boot log + serial only
 	void Fatal (const char *pFormat, ...);	// say, flush the log, then stop for good
 	void FlushBootLog (void);		// rewrite SD:/bootlog.txt from RAM
+	static void PanicHandler (void);	// Circle panic: save the log once
 	void LogBoard (void);
 	bool LoadROM (void);
 	bool OpenDisk (void);

@@ -162,6 +162,7 @@ bool CKernel::Initialize (void)
 
 	mSerial.Initialize (115200);
 	mLogger.Initialize (&m_LogTee);		// UART + boot log, never the screen
+	mLogger.RegisterPanicHandler (PanicHandler);	// crash -> try to save the log
 	mTimer.Initialize ();
 
 	// Board tag for the file names: drop "Raspberry Pi ", lower case,
@@ -265,6 +266,19 @@ void CKernel::Log (const char *pFormat, ...)
 	va_end (Args);
 
 	LogLine (&mSerial, Buf, n);
+}
+
+// Circle calls this after logging a panic (e.g. a CPU exception), just
+// before it halts.  The SD driver may not work from here, but it's worth
+// one try: the panic text is the most useful line in the log.
+void CKernel::PanicHandler (void)
+{
+	static bool bOnce;
+	if (!bOnce && s_pThis != 0)
+	{
+		bOnce = true;
+		s_pThis->FlushBootLog ();
+	}
 }
 
 void CKernel::FlushBootLog (void)
@@ -478,6 +492,17 @@ void CKernel::SetupDisplay (void)
 	if (m_nScale == 0)
 	{
 		m_nScale = 1;		// screen smaller than 512x342: top-left only
+	}
+
+	// cmdline.txt "macscale=N" forces a smaller whole-number scale
+	unsigned nWanted = mOptions.GetAppOptionDecimal ("macscale", 0);
+	if (nWanted >= 1 && nWanted != (unsigned) -1)
+	{
+		if (nWanted < m_nScale)
+		{
+			m_nScale = nWanted;
+		}
+		Log ("Screen: macscale=%u in cmdline.txt -> %ux", nWanted, m_nScale);
 	}
 	unsigned nW = EMU_SCREEN_WIDTH * m_nScale;
 	unsigned nH = EMU_SCREEN_HEIGHT * m_nScale;
@@ -844,8 +869,13 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	{
 		static const char ClearScreen[] = "\x1b[H\x1b[J\x1b[?25l";
 		mScreen.Write (ClearScreen, sizeof ClearScreen - 1);
+		u64 nStart = CTimer::GetClockTicks64 ();
 		Blit (true);
+		Log ("Mac:  first frame drawn in %u ms",
+		     (unsigned) ((CTimer::GetClockTicks64 () - nStart) / 1000));
+		FlushBootLog ();
 	}
+	bool bLoggedFirstSecond = false;
 
 	u64 nNow = CTimer::GetClockTicks64 ();
 	u64 nNextVsync = nNow + VSYNC_US;
@@ -897,6 +927,13 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 		{
 			emu_1hz ();
 			nNext1Hz += 1000000;
+			if (!bLoggedFirstSecond)
+			{
+				bLoggedFirstSecond = true;
+				Log ("Mac:  running (first second: %u slices = %u ms of Mac time)",
+				     nSlices, nSlices * emu_slice_us () / 1000);
+				FlushBootLog ();
+			}
 		}
 
 		if (nNow >= nNextUSB)

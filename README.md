@@ -38,7 +38,9 @@ which runs Mini vMac on a Buildroot Linux image.
   results. Each boot of the same board overwrites its own files.
 - **Boot log:** `bootlog-<board>.txt` on the card records each start-up stage
   (board, kernel, SD card, screen, ROM, disk, USB, Circle's own log) and
-  the first minute of speed lines. It's rewritten at each stage, so even a
+  the first minute of speed lines, plus when the first frame was drawn and
+  when the Mac finished its first second. If Circle crashes, it tries to
+  save the crash message to the log too. It's rewritten at each stage, so even a
   boot with no picture leaves one. The Mac also keeps running without a
   screen, so the log and `speed-<board>.txt` still get written.
 - **Speed report:** 60 s after the Mac starts, it writes `speed-<board>.txt` to the
@@ -75,6 +77,10 @@ looks wrong. A file marked read-only on the card is mounted read-only.
 a 3x Mac (1536x1026), 720p gives 2x. To force 1024x768 (2x, thin black
 bars), uncomment `hdmi_group=2` and `hdmi_mode=16` in `config.txt`; not
 every screen accepts it, and the Pi 5 ignores them.
+
+**Smaller Mac:** add `macscale=2` (or `1`) to the single line in
+`cmdline.txt` to draw the Mac smaller than the largest scale that fits,
+e.g. `logdev=ttyS1 loglevel=4 macscale=2`.
 
 **Never add `gpu_mem=16`.** It makes the firmware look for the cut-down
 `start_cd.elf` / `start4cd.elf`, which aren't on the card, and the Pi then

@@ -291,6 +291,22 @@ void CKernel::PanicHandler (void)
 	if (!bOnce && s_pThis != 0)
 	{
 		bOnce = true;
+
+		// First the screen (plain memory writes, works from an exception),
+		// then one try at the SD card
+		if (s_pThis->m_bScreenOK)
+		{
+			static const char Head[] = "\x1b[H\x1b[J\x1b[?25h"
+				"*** ClassicPi-Metal crashed. Last lines of the boot log:\n\n";
+			s_pThis->mScreen.Write (Head, sizeof Head - 1);
+			unsigned nLen = s_nBootLog;
+			unsigned nFrom = nLen > 1500 ? nLen - 1500 : 0;
+			while (nFrom < nLen && nFrom > 0 && s_BootLog[nFrom - 1] != '\n')
+			{
+				nFrom++;	// start at a line boundary
+			}
+			s_pThis->mScreen.Write (s_BootLog + nFrom, nLen - nFrom);
+		}
 		s_pThis->FlushBootLog ();
 	}
 }

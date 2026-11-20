@@ -212,6 +212,17 @@ bool CKernel::Initialize (void)
 	m_bSDOK =    m_EMMC.Initialize ()
 		  && f_mount (&m_FileSystem, "SD:", 1) == FR_OK;
 
+	// Keep the previous boot's log (a hung boot is followed by a power
+	// cycle, and that log is the one that says where it stopped)
+	if (m_bSDOK)
+	{
+		char Prev[72];
+		snprintf (Prev, sizeof Prev, "%.*s-prev.txt",
+			  (int) (strlen (m_BootLogFile) - 4), m_BootLogFile);
+		f_unlink (Prev);
+		f_rename (m_BootLogFile, Prev + 3);	// FatFs: new name without "SD:"
+	}
+
 	m_bScreenOK = mScreen.Initialize ();
 
 	return true;

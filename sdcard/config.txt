@@ -50,5 +50,10 @@ initial_turbo=0
 # Keep HDMI on even if the screen is switched on after the Pi
 hdmi_force_hotplug=1
 
+# Use the whole picture: without this the firmware leaves a black border
+# for TVs (a Zero W on a 1080p screen got 1824x984, so only a 2x Mac;
+# 1920x1080 fits a 3x Mac)
+disable_overscan=1
+
 # Do NOT set gpu_mem=16: it makes the firmware load start_cd.elf /
 # start4cd.elf, which are not on this card, and the Pi won't boot at all.

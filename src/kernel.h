@@ -67,6 +67,11 @@ private:
 	CConsole	m_SerialConsole;	// stdout/stderr of the core -> UART
 	CLogTee		m_LogTee;
 
+	// Per-board file names, so several boards can share one card:
+	// "Raspberry Pi Zero 2 W" -> SD:/speed-zero-2-w.txt, SD:/bootlog-zero-2-w.txt
+	char		m_SpeedFile[64];
+	char		m_BootLogFile[64];
+
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started
 

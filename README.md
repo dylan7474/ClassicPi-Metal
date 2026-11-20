@@ -29,16 +29,19 @@ which runs Mini vMac on a Buildroot Linux image.
 - USB keyboard and mouse, plugged in at any time, directly or through a hub.
   Up to four keyboards and four mice at once (many keyboards and wireless
   receivers show up as more than one device). Plugging in and unplugging are
-  written to `bootlog.txt`.
+  written to `bootlog-<board>.txt`.
 - Reads and writes go straight to the disk image file on the SD card.
   Writes are flushed one second after the Mac stops writing.
 - If the ROM is missing or wrong, the screen says so in plain words.
-- **Boot log:** `bootlog.txt` on the card records each start-up stage
+- **Per-board files:** `<board>` is the model, e.g. `zero-2-w`, `zero-w`,
+  `3-model-b`, so one card can go round several boards and keep each one's
+  results. Each boot of the same board overwrites its own files.
+- **Boot log:** `bootlog-<board>.txt` on the card records each start-up stage
   (board, kernel, SD card, screen, ROM, disk, USB, Circle's own log) and
   the first minute of speed lines. It's rewritten at each stage, so even a
   boot with no picture leaves one. The Mac also keeps running without a
-  screen, so the log and `speed.txt` still get written.
-- **Speed report:** 60 s after the Mac starts, it writes `speed.txt` to the
+  screen, so the log and `speed-<board>.txt` still get written.
+- **Speed report:** 60 s after the Mac starts, it writes `speed-<board>.txt` to the
   card once per boot: the board, kernel, screen and how fast the Mac runs
   compared with a real Mac Plus. umac runs the 68000 as fast as the Pi
   allows, so this is the number to compare boards by. The serial port also
@@ -57,7 +60,7 @@ Use a FAT32 card (one partition). Run `make sdcard` and copy everything from
 | `kernel.img`, `kernel7.img`, `kernel8.img`, `kernel8-rpi4.img`, `kernel_2712.img`, `armstub8-rpi4.bin` | This program, one kernel per Pi family (see the table at the top); the armstub is Circle's Pi 4 start-up code |
 | `mac.rom` | **Yours:** a Mac Plus v3 ROM, checksum `4D1F8172`, 128 KB (`vMac.ROM` also accepted; extra bytes after 128 KB are ignored) |
 | `disk1.dsk` | **Yours:** a raw HFS disk image (`disk1.img` and `disk.dsk` also accepted) |
-| `speed.txt`, `bootlog.txt` | Written by the Pi (see below); safe to delete |
+| `speed-<board>.txt`, `bootlog-<board>.txt` | Written by the Pi (see below); safe to delete |
 
 The ROM and System software are Apple's copyright, so they are never in this
 repository (`.gitignore` blocks `*.rom` and `*.dsk`). Dump the ROM from a Mac
@@ -100,15 +103,15 @@ the emulator's own messages.
 
 | What you see | What it means |
 |---|---|
-| No picture at all, and no `bootlog.txt` on the card afterwards | The Pi firmware never started our kernel. Check `config.txt` (no `gpu_mem=16`; a section for this board) and that the firmware and kernel files are on the card. |
-| No picture, but `bootlog.txt` is there | The kernel ran. The `Screen:` line in the log says whether HDMI started and in which mode; try another screen or HDMI port (on a Pi 4, the one next to the power socket). |
+| No picture at all, and no `bootlog-<board>.txt` on the card afterwards | The Pi firmware never started our kernel. Check `config.txt` (no `gpu_mem=16`; a section for this board) and that the firmware and kernel files are on the card. |
+| No picture, but `bootlog-<board>.txt` is there | The kernel ran. The `Screen:` line in the log says whether HDMI started and in which mode; try another screen or HDMI port (on a Pi 4, the one next to the power socket). |
 | Rainbow square, then nothing | The firmware didn't find a kernel for this board. Check `config.txt` has a section for it and that the kernel file is on the card. |
 | White text, then `*** Cannot start the SD card` | Circle couldn't use the SD card. Expected in QEMU's Pi 4 model; on a real board, try another card. |
 | White text, then `*** No Mac ROM found` (or a wrong checksum) | Put the Mac Plus v3 ROM in the root of the card as `mac.rom`. |
 | The Mac shows a flashing question-mark disk | No disk image was found, or it isn't a bootable System disk. |
 | Mac works, keyboard or mouse doesn't | Use a powered OTG hub; some cheap hubs don't pass USB through properly. Unplug and replug: devices are picked up while running. |
 
-After a minute of running, `speed.txt` on the card says how fast that board runs the Mac, and `bootlog.txt` has the full start-up log.
+After a minute of running, `speed-<board>.txt` on the card says how fast that board runs the Mac, and `bootlog-<board>.txt` has the full start-up log.
 
 ## Building
 

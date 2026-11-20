@@ -27,8 +27,7 @@
 #define VSYNC_US	16667		// 60 Hz
 #define SYNC_AFTER_US	1000000		// flush disk writes after 1 s quiet
 #define STATS_US	10000000	// speed line on the serial port every 10 s
-#define SPEED_FILE_AT	6		// write SD:/speed.txt after the 6th (60 s)
-#define SPEED_FILE	"SD:/speed.txt"
+#define SPEED_FILE_AT	6		// write the speed file after the 6th (60 s)
 
 // ROM and disk names looked for in the root of the SD card (case does not matter)
 static const char *const ROMNames[]  = { "SD:/mac.rom", "SD:/vMac.ROM", "SD:/MacPlus.ROM" };
@@ -101,7 +100,6 @@ extern "C" int hal_disk_write (void *ctx, const uint8_t *buf, uint32_t offset, u
 // kept in RAM and written to SD:/bootlog.txt at each stage (a dozen small
 // writes per boot, then it stops).  Survives a dead screen.
 
-#define BOOTLOG_FILE	"SD:/bootlog.txt"
 #define BOOTLOG_SIZE	32768
 
 static char s_BootLog[BOOTLOG_SIZE];
@@ -165,6 +163,41 @@ bool CKernel::Initialize (void)
 	mSerial.Initialize (115200);
 	mLogger.Initialize (&m_LogTee);		// UART + boot log, never the screen
 	mTimer.Initialize ();
+
+	// Board tag for the file names: drop "Raspberry Pi ", lower case,
+	// spaces to '-', anything else odd dropped ("Zero 2 W" -> "zero-2-w")
+	char Tag[32];
+	const char *pName = CMachineInfo::Get ()->GetMachineName ();
+	static const char Prefix[] = "Raspberry Pi ";
+	if (strncmp (pName, Prefix, sizeof Prefix - 1) == 0)
+	{
+		pName += sizeof Prefix - 1;
+	}
+	unsigned n = 0;
+	for (; *pName != '\0' && n < sizeof Tag - 1; pName++)
+	{
+		char c = *pName;
+		if (c >= 'A' && c <= 'Z')
+		{
+			c += 'a' - 'A';
+		}
+		if (c == ' ' || c == '-')
+		{
+			c = '-';
+		}
+		else if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+'))
+		{
+			continue;
+		}
+		Tag[n++] = c;
+	}
+	Tag[n] = '\0';
+	if (n == 0)
+	{
+		strcpy (Tag, "unknown");
+	}
+	snprintf (m_SpeedFile, sizeof m_SpeedFile, "SD:/speed-%s.txt", Tag);
+	snprintf (m_BootLogFile, sizeof m_BootLogFile, "SD:/bootlog-%s.txt", Tag);
 
 	// The core's printf/fprintf go to the UART, never onto the Mac screen
 	if (m_SerialConsole.Initialize ())
@@ -241,7 +274,7 @@ void CKernel::FlushBootLog (void)
 		return;
 	}
 	FIL File;
-	if (f_open (&File, BOOTLOG_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	if (f_open (&File, m_BootLogFile, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
 	{
 		return;
 	}
@@ -411,15 +444,15 @@ void CKernel::WriteSpeedFile (unsigned nPercent)
 	}
 
 	FIL File;
-	if (f_open (&File, SPEED_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	if (f_open (&File, m_SpeedFile, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
 	{
-		Log ("cannot write %s", SPEED_FILE);
+		Log ("cannot write %s", m_SpeedFile);
 		return;
 	}
 	UINT nWritten;
 	f_write (&File, Text, n, &nWritten);
 	f_close (&File);
-	Log ("wrote %s", SPEED_FILE);
+	Log ("wrote %s", m_SpeedFile);
 }
 
 void CKernel::SetupDisplay (void)

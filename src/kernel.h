@@ -79,7 +79,6 @@ private:
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started
 	bool		m_bScaleFallback;	// scale lowered after a hung boot
-	bool		m_bTraceBlit;		// log progress while drawing
 
 	CUSBKeyboardDevice * volatile m_pKeyboards[MAX_INPUTS];	// slot -> device, 0 = free
 	CMouseDevice * volatile m_pMice[MAX_INPUTS];

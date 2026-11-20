@@ -134,7 +134,6 @@ CKernel::CKernel (void)
 	m_bSDOK (false),
 	m_bScreenOK (false),
 	m_bScaleFallback (false),
-	m_bTraceBlit (false),
 	m_nUSBLogFlushes (0),
 	m_bUSBRemoved (false),
 	m_pROM (0),
@@ -620,11 +619,6 @@ void CKernel::Blit (bool bForce)
 
 	for (unsigned y = 0; y < nRows; y++)
 	{
-		if (m_bTraceBlit && y % 57 == 0)
-		{
-			Log ("Mac:  first frame, row %u of %u", y, nRows);
-			FlushBootLog ();
-		}
 		const u8 *pSrc = pMac + y * EMU_SCREEN_STRIDE;
 		u8 *pShadow = s_Shadow + y * EMU_SCREEN_STRIDE;
 		if (!bForce && memcmp (pSrc, pShadow, EMU_SCREEN_STRIDE) == 0)
@@ -926,7 +920,6 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	Say ("ClassicPi-Metal " VERSION " - Mac Plus (umac), %u KB RAM", emu_ram_kb ());
 	Say ("");
 	LogBoard ();
-	FlushBootLog ();
 
 	// SD card (started in Initialize so the log could be written)
 	if (!m_bSDOK)
@@ -936,9 +929,10 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 
 	LoadROM ();
 	bool bReadOnly = OpenDisk ();
-	FlushBootLog ();
 
-	// USB keyboard + mouse
+	// USB keyboard + mouse.  Few log writes during start-up (each costs
+	// ~0.3 s on a Zero W): before and after USB, then after the first
+	// second of running.  Fatal() and a crash write it too.
 	Say ("USB:  starting...");
 	FlushBootLog ();			// in case USB start-up hangs
 	if (!m_USBHCI.Initialize ())
@@ -964,10 +958,9 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	}
 
 	Log ("Mac:  started");
-	FlushBootLog ();
-	CTimer::SimpleMsDelay (1500);	// let people read the banner
 
-	// From here the screen belongs to the Mac
+	// From here the screen belongs to the Mac (no pause for the banner:
+	// errors stop with Fatal() and stay on screen)
 	if (m_bScreenOK)
 	{
 		// Record the scale we're about to draw at; if this boot hangs, the
@@ -977,20 +970,13 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 			  m_bScaleFallback ? " fallback" : "");
 		WriteStage (Stage);
 
-		Log ("Mac:  clearing the text screen");
-		FlushBootLog ();
 		static const char ClearScreen[] = "\x1b[H\x1b[J\x1b[?25l";
 		mScreen.Write (ClearScreen, sizeof ClearScreen - 1);
-		Log ("Mac:  drawing the first frame");
-		FlushBootLog ();
 
 		u64 nStart = CTimer::GetClockTicks64 ();
-		m_bTraceBlit = true;		// progress marks while drawing it
 		Blit (true);
-		m_bTraceBlit = false;
 		Log ("Mac:  first frame drawn in %u ms",
 		     (unsigned) ((CTimer::GetClockTicks64 () - nStart) / 1000));
-		FlushBootLog ();
 	}
 	bool bLoggedFirstSecond = false;
 
@@ -1020,10 +1006,7 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 			if (++nReports == SPEED_FILE_AT)
 			{
 				WriteSpeedFile (nPercent);
-			}
-			if (nReports <= SPEED_FILE_AT)
-			{
-				FlushBootLog ();	// first minute only, then the log stops
+				FlushBootLog ();	// once, at 60 s (a write mid-run is a hitch)
 			}
 			nSlices = 0;
 			nStatsStart = CTimer::GetClockTicks64 ();

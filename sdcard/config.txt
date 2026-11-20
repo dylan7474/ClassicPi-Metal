@@ -40,6 +40,9 @@ kernel=kernel_2712.img
 [all]
 initial_turbo=0
 
+# No rainbow square at power-on (documented legacy option, default 0)
+disable_splash=1
+
 # HDMI: the screen's own preferred mode is used, and the Mac picture is
 # scaled by a whole number and centred (1080p gives 3x, 720p gives 2x).
 # To force 1024x768 (a 2x Mac with thin bars), uncomment these two lines;

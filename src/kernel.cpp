@@ -13,6 +13,7 @@
 #include "platform_hal.h"
 
 #include <circle/bcmframebuffer.h>
+#include <circle/machineinfo.h>
 #include <circle/synchronize.h>
 #include <circle/timer.h>
 #include <circle/util.h>
@@ -25,6 +26,9 @@
 
 #define VSYNC_US	16667		// 60 Hz
 #define SYNC_AFTER_US	1000000		// flush disk writes after 1 s quiet
+#define STATS_US	10000000	// speed line on the serial port every 10 s
+#define SPEED_FILE_AT	6		// write SD:/speed.txt after the 6th (60 s)
+#define SPEED_FILE	"SD:/speed.txt"
 
 // ROM and disk names looked for in the root of the SD card (case does not matter)
 static const char *const ROMNames[]  = { "SD:/mac.rom", "SD:/vMac.ROM", "SD:/MacPlus.ROM" };
@@ -253,6 +257,46 @@ bool CKernel::OpenDisk (void)
 	Say ("      The Mac will show the flashing question-mark disk.");
 	CTimer::SimpleMsDelay (4000);
 	return false;
+}
+
+// Once per boot, 60 s in: a small text file so a board's speed can be read
+// on a PC without a serial cable.  One write, overwritten next boot.
+void CKernel::WriteSpeedFile (unsigned nPercent)
+{
+	char Text[512];
+	int n = snprintf (Text, sizeof Text,
+		"ClassicPi-Metal %s\r\n"
+		"Board:     %s\r\n"
+		"Kernel:    %u-bit, Circle RASPPI=%u\r\n"
+		"Screen:    %ux%u, %u bpp, Mac at %ux\r\n"
+		"Mac RAM:   %u KB\r\n"
+		"Mac speed: %u.%02ux real time (umac's own 8 MHz clock, approximate;\r\n"
+		"           1.00 = a real Mac Plus; averaged over 10 s, 60 s after start)\r\n"
+		"\r\n"
+		"Written once per boot, 60 s after the Mac starts.\r\n",
+		VERSION, CMachineInfo::Get ()->GetMachineName (),
+		(unsigned) (sizeof (void *) * 8), (unsigned) RASPPI,
+		m_nFBWidth, m_nFBHeight, m_nFBDepth, m_nScale,
+		emu_ram_kb (), nPercent / 100, nPercent % 100);
+	if (n <= 0)
+	{
+		return;
+	}
+	if (n >= (int) sizeof Text)
+	{
+		n = sizeof Text - 1;
+	}
+
+	FIL File;
+	if (f_open (&File, SPEED_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		printf ("%s: cannot write %s\n", FROM, SPEED_FILE);
+		return;
+	}
+	UINT nWritten;
+	f_write (&File, Text, n, &nWritten);
+	f_close (&File);
+	printf ("%s: wrote %s\n", FROM, SPEED_FILE);
 }
 
 void CKernel::SetupDisplay (void)
@@ -533,12 +577,31 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	u64 nNext1Hz = nNow + 1000000;
 	u64 nNextUSB = nNow + 100000;
 
+	// Speed: umac runs the 68000 as fast as the Pi allows, so count slices
+	u64 nStatsStart = nNow;
+	unsigned nSlices = 0;
+	unsigned nReports = 0;
+
 	while (1)
 	{
 		DrainInput ();
 		emu_run_slice ();
+		nSlices++;
 
 		nNow = CTimer::GetClockTicks64 ();
+
+		if (nNow - nStatsStart >= STATS_US)
+		{
+			u64 nMacUs = (u64) nSlices * emu_slice_us ();
+			unsigned nPercent = (unsigned) (nMacUs * 100 / (nNow - nStatsStart));
+			printf ("%s: Mac speed %u.%02ux real time\n", FROM, nPercent / 100, nPercent % 100);
+			if (++nReports == SPEED_FILE_AT)
+			{
+				WriteSpeedFile (nPercent);
+			}
+			nSlices = 0;
+			nStatsStart = CTimer::GetClockTicks64 ();
+		}
 
 		if (nNow >= nNextVsync)
 		{

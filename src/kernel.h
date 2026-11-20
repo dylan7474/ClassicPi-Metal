@@ -28,6 +28,7 @@ private:
 	void Fatal (const char *pFormat, ...);	// say, then stop for good
 	bool LoadROM (void);
 	bool OpenDisk (void);
+	void WriteSpeedFile (unsigned nPercent);
 
 	// Display
 	void SetupDisplay (void);

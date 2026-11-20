@@ -60,6 +60,13 @@ void emu_run_slice(void)
         umac_loop();
 }
 
+unsigned emu_slice_us(void)
+{
+        /* umac_loop() runs m68k_execute(5000 * 8) = 5 ms at 8 MHz
+         * (UMAC_EXECLOOP_QUANTUM in umac's main.c, not in a header). */
+        return 5000;
+}
+
 void emu_vsync(void)
 {
         umac_vsync_event();

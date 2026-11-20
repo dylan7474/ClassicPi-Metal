@@ -39,6 +39,10 @@ int     emu_init(uint8_t *rom, void *disk_ctx, uint32_t disk_size, int read_only
 /* Run the 68000 for one quantum (about 5 ms of Mac time). */
 void    emu_run_slice(void);
 
+/* Mac time covered by one emu_run_slice(), in microseconds.  The core runs
+ * as fast as the host allows, so slices per second x this = Mac speed. */
+unsigned emu_slice_us(void);
+
 /* Time events: call at 60 Hz and 1 Hz. */
 void    emu_vsync(void);
 void    emu_1hz(void);

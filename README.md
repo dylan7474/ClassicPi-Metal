@@ -30,6 +30,11 @@ which runs Mini vMac on a Buildroot Linux image.
 - Reads and writes go straight to the disk image file on the SD card.
   Writes are flushed one second after the Mac stops writing.
 - If the ROM is missing or wrong, the screen says so in plain words.
+- **Speed report:** 60 s after the Mac starts, it writes `speed.txt` to the
+  card once per boot: the board, kernel, screen and how fast the Mac runs
+  compared with a real Mac Plus. umac runs the 68000 as fast as the Pi
+  allows, so this is the number to compare boards by. The serial port also
+  gets a speed line every 10 s.
 
 ## What goes on the SD card
 
@@ -44,6 +49,7 @@ Use a FAT32 card (one partition). Run `make sdcard` and copy everything from
 | `kernel.img`, `kernel7.img`, `kernel8.img`, `kernel8-rpi4.img`, `kernel_2712.img`, `armstub8-rpi4.bin` | This program, one kernel per Pi family (see the table at the top); the armstub is Circle's Pi 4 start-up code |
 | `mac.rom` | **Yours:** a Mac Plus v3 ROM, checksum `4D1F8172`, 128 KB (`vMac.ROM` also accepted; extra bytes after 128 KB are ignored) |
 | `disk1.dsk` | **Yours:** a raw HFS disk image (`disk1.img` and `disk.dsk` also accepted) |
+| `speed.txt` | Written by the Pi (see the speed report above); safe to delete |
 
 The ROM and System software are Apple's copyright, so they are never in this
 repository (`.gitignore` blocks `*.rom` and `*.dsk`). Dump the ROM from a Mac

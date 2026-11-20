@@ -83,6 +83,19 @@ Any mouse button is the Mac's one button.
 **Serial console:** GPIO 14/15, 115200 baud. It shows the startup messages and
 the emulator's own messages.
 
+## If it doesn't start
+
+| What you see | What it means |
+|---|---|
+| Rainbow square, then nothing | The firmware didn't find a kernel for this board. Check `config.txt` has a section for it and that the kernel file is on the card. |
+| Black screen, no text at all | The kernel started but has no picture. Try another HDMI screen, or delete the `hdmi_group`/`hdmi_mode` lines from `config.txt`. The serial port (GPIO 14/15, 115200) will show whether it's running. |
+| White text, then `*** Cannot start the SD card` | Circle couldn't use the SD card. Expected in QEMU's Pi 4 model; on a real board, try another card. |
+| White text, then `*** No Mac ROM found` (or a wrong checksum) | Put the Mac Plus v3 ROM in the root of the card as `mac.rom`. |
+| The Mac shows a flashing question-mark disk | No disk image was found, or it isn't a bootable System disk. |
+| Mac works, keyboard or mouse doesn't | Use a powered OTG hub; some cheap hubs don't pass USB through properly. Unplug and replug: devices are picked up while running. |
+
+After a minute of running, `speed.txt` on the card says how fast that board runs the Mac.
+
 ## Building
 
 You need:

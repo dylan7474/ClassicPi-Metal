@@ -40,15 +40,15 @@ kernel=kernel_2712.img
 [all]
 initial_turbo=0
 
-# HDMI: the Mac picture is scaled by a whole number and centred.
-# 1024x768 gives a 2x Mac (1024x684) with thin black bars.
-# Remove these two lines to use the screen's own preferred mode.
-# (The Pi 5 ignores them and uses the screen's preferred mode.)
-hdmi_group=2
-hdmi_mode=16
+# HDMI: the screen's own preferred mode is used, and the Mac picture is
+# scaled by a whole number and centred (1080p gives 3x, 720p gives 2x).
+# To force 1024x768 (a 2x Mac with thin bars), uncomment these two lines;
+# not every screen accepts it.  The Pi 5 ignores them.
+#hdmi_group=2
+#hdmi_mode=16
 
 # Keep HDMI on even if the screen is switched on after the Pi
 hdmi_force_hotplug=1
 
-# Smallest GPU memory share: the Mac needs none
-gpu_mem=16
+# Do NOT set gpu_mem=16: it makes the firmware load start_cd.elf /
+# start4cd.elf, which are not on this card, and the Pi won't boot at all.

@@ -14,6 +14,17 @@
 #include <circle/input/mouse.h>
 #include <fatfs/ff.h>
 
+// Circle's logger writes here: every line goes to the UART and into the
+// boot log kept in RAM (flushed to SD:/bootlog.txt at each stage).
+class CLogTee : public CDevice
+{
+public:
+	CLogTee (CDevice *pSerial) : m_pSerial (pSerial) {}
+	int Write (const void *pBuffer, size_t nCount) override;
+private:
+	CDevice *m_pSerial;
+};
+
 class CKernel : public CStdlibAppScreen
 {
 public:
@@ -24,8 +35,11 @@ public:
 
 private:
 	// Startup
-	void Say (const char *pFormat, ...);	// screen + serial
-	void Fatal (const char *pFormat, ...);	// say, then stop for good
+	void Say (const char *pFormat, ...);	// screen + boot log + serial
+	void Log (const char *pFormat, ...);	// boot log + serial only
+	void Fatal (const char *pFormat, ...);	// say, flush the log, then stop for good
+	void FlushBootLog (void);		// rewrite SD:/bootlog.txt from RAM
+	void LogBoard (void);
 	bool LoadROM (void);
 	bool OpenDisk (void);
 	void WriteSpeedFile (unsigned nPercent);
@@ -47,6 +61,10 @@ private:
 	CEMMCDevice	m_EMMC;
 	FATFS		m_FileSystem;
 	CConsole	m_SerialConsole;	// stdout/stderr of the core -> UART
+	CLogTee		m_LogTee;
+
+	bool		m_bSDOK;		// SD card started and FAT mounted
+	bool		m_bScreenOK;		// HDMI framebuffer started
 
 	CUSBKeyboardDevice * volatile m_pKeyboard;
 	CMouseDevice * volatile m_pMouse;

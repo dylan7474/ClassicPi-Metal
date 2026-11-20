@@ -96,11 +96,45 @@ extern "C" int hal_disk_write (void *ctx, const uint8_t *buf, uint32_t offset, u
 
 // ---- Kernel ---------------------------------------------------------------
 
+// ---- Boot log -------------------------------------------------------------
+// Everything said during startup, Circle's own log lines and the speed lines,
+// kept in RAM and written to SD:/bootlog.txt at each stage (a dozen small
+// writes per boot, then it stops).  Survives a dead screen.
+
+#define BOOTLOG_FILE	"SD:/bootlog.txt"
+#define BOOTLOG_SIZE	32768
+
+static char s_BootLog[BOOTLOG_SIZE];
+static volatile unsigned s_nBootLog;
+
+static void BootLogAppend (const char *p, size_t n)
+{
+	EnterCritical ();
+	if (s_nBootLog + n > BOOTLOG_SIZE - 1)
+	{
+		n = BOOTLOG_SIZE - 1 - s_nBootLog;	// full: keep the start
+	}
+	memcpy (s_BootLog + s_nBootLog, p, n);
+	s_nBootLog += n;
+	LeaveCritical ();
+}
+
+int CLogTee::Write (const void *pBuffer, size_t nCount)
+{
+	BootLogAppend ((const char *) pBuffer, nCount);
+	return m_pSerial->Write (pBuffer, nCount);
+}
+
+// ---- Kernel ---------------------------------------------------------------
+
 CKernel::CKernel (void)
 :	CStdlibAppScreen ("ClassicPi-Metal"),
 	m_USBHCI (&mInterrupt, &mTimer, TRUE),
 	m_EMMC (&mInterrupt, &mTimer, &mActLED),
 	m_SerialConsole (&mSerial, &mSerial),
+	m_LogTee (&mSerial),
+	m_bSDOK (false),
+	m_bScreenOK (false),
 	m_pKeyboard (0),
 	m_pMouse (0),
 	m_pROM (0),
@@ -112,21 +146,61 @@ CKernel::CKernel (void)
 	s_pThis = this;
 }
 
+// Our own start-up order (not CStdlibAppScreen::Initialize, which gives up
+// silently if the screen fails): serial and log first, then the SD card so
+// a log can be written, then the screen.  Nothing here stops the boot
+// except the interrupt system; failures are reported by Run().
 bool CKernel::Initialize (void)
 {
-	if (!CStdlibAppScreen::Initialize ())
+	if (!CStdlibApp::Initialize ())		// interrupts
 	{
 		return false;
 	}
+
+	mSerial.Initialize (115200);
+	mLogger.Initialize (&m_LogTee);		// UART + boot log, never the screen
+	mTimer.Initialize ();
 
 	// The core's printf/fprintf go to the UART, never onto the Mac screen
-	if (!m_SerialConsole.Initialize ())
+	if (m_SerialConsole.Initialize ())
 	{
-		return false;
+		CGlueStdioInit (m_SerialConsole);
 	}
-	CGlueStdioInit (m_SerialConsole);
+
+	m_bSDOK =    m_EMMC.Initialize ()
+		  && f_mount (&m_FileSystem, "SD:", 1) == FR_OK;
+
+	m_bScreenOK = mScreen.Initialize ();
 
 	return true;
+}
+
+static int FormatLine (char *pBuf, size_t nSize, const char *pFormat, va_list Args)
+{
+	int n = vsnprintf (pBuf, nSize - 2, pFormat, Args);
+	if (n < 0)
+	{
+		return 0;
+	}
+	if (n > (int) nSize - 3)
+	{
+		n = nSize - 3;
+	}
+	pBuf[n++] = '\n';
+	pBuf[n] = '\0';
+	return n;
+}
+
+// Boot log copy gets an uptime stamp; screen and serial get the plain line
+static void LogLine (CDevice *pSerial, const char *pLine, int n)
+{
+	char Stamp[24];
+	u64 nMs = CTimer::GetClockTicks64 () / 1000;
+	int s = snprintf (Stamp, sizeof Stamp, "[%5u.%03u] ",
+			  (unsigned) (nMs / 1000), (unsigned) (nMs % 1000));
+	BootLogAppend (Stamp, s);
+	BootLogAppend (pLine, n);
+	pSerial->Write (pLine, n);
 }
 
 void CKernel::Say (const char *pFormat, ...)
@@ -134,21 +208,64 @@ void CKernel::Say (const char *pFormat, ...)
 	char Buf[256];
 	va_list Args;
 	va_start (Args, pFormat);
-	int n = vsnprintf (Buf, sizeof Buf - 2, pFormat, Args);
+	int n = FormatLine (Buf, sizeof Buf, pFormat, Args);
 	va_end (Args);
-	if (n < 0)
+
+	if (m_bScreenOK)
+	{
+		mScreen.Write (Buf, n);
+	}
+	LogLine (&mSerial, Buf, n);
+}
+
+void CKernel::Log (const char *pFormat, ...)
+{
+	char Buf[256];
+	va_list Args;
+	va_start (Args, pFormat);
+	int n = FormatLine (Buf, sizeof Buf, pFormat, Args);
+	va_end (Args);
+
+	LogLine (&mSerial, Buf, n);
+}
+
+void CKernel::FlushBootLog (void)
+{
+	if (!m_bSDOK)
 	{
 		return;
 	}
-	if (n > (int) sizeof Buf - 3)
+	FIL File;
+	if (f_open (&File, BOOTLOG_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
 	{
-		n = sizeof Buf - 3;
+		return;
 	}
-	Buf[n++] = '\n';
-	Buf[n] = '\0';
+	UINT nWritten;
+	f_write (&File, s_BootLog, s_nBootLog, &nWritten);
+	f_close (&File);
+}
 
-	mScreen.Write (Buf, n);
-	mSerial.Write (Buf, n);
+void CKernel::LogBoard (void)
+{
+	CMachineInfo *pInfo = CMachineInfo::Get ();
+	Log ("Board:  %s (revision code %08X), %s, %u MB RAM",
+	     pInfo->GetMachineName (), (unsigned) pInfo->GetRevisionRaw (),
+	     pInfo->GetSoCName (), pInfo->GetRAMSize ());
+	Log ("Kernel: %u-bit, Circle RASPPI=%u, built " __DATE__ " " __TIME__,
+	     (unsigned) (sizeof (void *) * 8), (unsigned) RASPPI);
+	Log ("Options: width=%u height=%u (0 = screen's preferred mode)",
+	     mOptions.GetWidth (), mOptions.GetHeight ());
+	Log ("SD card: %s", m_bSDOK ? "OK" : "FAILED");
+	if (m_bScreenOK)
+	{
+		CBcmFrameBuffer *pFB = mScreen.GetFrameBuffer ();
+		Log ("Screen: OK, %ux%u, %u bpp, pitch %u",
+		     pFB->GetWidth (), pFB->GetHeight (), pFB->GetDepth (), pFB->GetPitch ());
+	}
+	else
+	{
+		Log ("Screen: FAILED to start (no HDMI picture); the Mac runs anyway");
+	}
 }
 
 void CKernel::Fatal (const char *pFormat, ...)
@@ -163,6 +280,7 @@ void CKernel::Fatal (const char *pFormat, ...)
 	Say ("*** %s", Buf);
 	Say ("");
 	Say ("Fix the SD card on a PC and power the Pi off and on again.");
+	FlushBootLog ();
 
 	while (1)
 	{
@@ -290,17 +408,25 @@ void CKernel::WriteSpeedFile (unsigned nPercent)
 	FIL File;
 	if (f_open (&File, SPEED_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
 	{
-		printf ("%s: cannot write %s\n", FROM, SPEED_FILE);
+		Log ("cannot write %s", SPEED_FILE);
 		return;
 	}
 	UINT nWritten;
 	f_write (&File, Text, n, &nWritten);
 	f_close (&File);
-	printf ("%s: wrote %s\n", FROM, SPEED_FILE);
+	Log ("wrote %s", SPEED_FILE);
 }
 
 void CKernel::SetupDisplay (void)
 {
+	if (!m_bScreenOK)
+	{
+		m_pFB = 0;
+		m_nFBWidth = m_nFBHeight = m_nFBPitch = m_nFBDepth = 0;
+		m_nScale = m_nOffX = m_nOffY = 0;
+		return;
+	}
+
 	CBcmFrameBuffer *pFrameBuffer = mScreen.GetFrameBuffer ();
 	m_pFB       = (u8 *) (uintptr) pFrameBuffer->GetBuffer ();
 	m_nFBWidth  = pFrameBuffer->GetWidth ();
@@ -327,6 +453,10 @@ void CKernel::SetupDisplay (void)
 // Draw changed rows of the Mac's 1-bit screen, scaled, into the HDMI framebuffer.
 void CKernel::Blit (bool bForce)
 {
+	if (m_pFB == 0)
+	{
+		return;		// no screen: the Mac runs blind (see bootlog.txt)
+	}
 	const u8 *pMac = emu_framebuffer ();
 	const unsigned nBytesPP = m_nFBDepth / 8;
 	unsigned nRows = EMU_SCREEN_HEIGHT;
@@ -529,22 +659,22 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 {
 	Say ("ClassicPi-Metal " VERSION " - Mac Plus (umac), %u KB RAM", emu_ram_kb ());
 	Say ("");
+	LogBoard ();
+	FlushBootLog ();
 
-	// SD card
-	if (!m_EMMC.Initialize ())
+	// SD card (started in Initialize so the log could be written)
+	if (!m_bSDOK)
 	{
-		Fatal ("Cannot start the SD card.");
-	}
-	if (f_mount (&m_FileSystem, "SD:", 1) != FR_OK)
-	{
-		Fatal ("Cannot mount the SD card's FAT partition.");
+		Fatal ("Cannot start the SD card, or mount its FAT partition.");
 	}
 
 	LoadROM ();
 	bool bReadOnly = OpenDisk ();
+	FlushBootLog ();
 
 	// USB keyboard + mouse
 	Say ("USB:  starting...");
+	FlushBootLog ();			// in case USB start-up hangs
 	if (!m_USBHCI.Initialize ())
 	{
 		Say ("USB:  failed to start; no keyboard or mouse.");
@@ -552,6 +682,7 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	UpdateUSB ();
 	Say ("USB:  keyboard %s, mouse %s", m_pKeyboard ? "found" : "not found yet",
 	     m_pMouse ? "found" : "not found yet");
+	FlushBootLog ();
 
 	SetupDisplay ();
 
@@ -565,12 +696,17 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 		Fatal ("Not enough memory for the Mac's %u KB of RAM.", emu_ram_kb ());
 	}
 
+	Log ("Mac:  started");
+	FlushBootLog ();
 	CTimer::SimpleMsDelay (1500);	// let people read the banner
 
 	// From here the screen belongs to the Mac
-	static const char ClearScreen[] = "\x1b[H\x1b[J\x1b[?25l";
-	mScreen.Write (ClearScreen, sizeof ClearScreen - 1);
-	Blit (true);
+	if (m_bScreenOK)
+	{
+		static const char ClearScreen[] = "\x1b[H\x1b[J\x1b[?25l";
+		mScreen.Write (ClearScreen, sizeof ClearScreen - 1);
+		Blit (true);
+	}
 
 	u64 nNow = CTimer::GetClockTicks64 ();
 	u64 nNextVsync = nNow + VSYNC_US;
@@ -594,10 +730,14 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 		{
 			u64 nMacUs = (u64) nSlices * emu_slice_us ();
 			unsigned nPercent = (unsigned) (nMacUs * 100 / (nNow - nStatsStart));
-			printf ("%s: Mac speed %u.%02ux real time\n", FROM, nPercent / 100, nPercent % 100);
+			Log ("Mac speed %u.%02ux real time", nPercent / 100, nPercent % 100);
 			if (++nReports == SPEED_FILE_AT)
 			{
 				WriteSpeedFile (nPercent);
+			}
+			if (nReports <= SPEED_FILE_AT)
+			{
+				FlushBootLog ();	// first minute only, then the log stops
 			}
 			nSlices = 0;
 			nStatsStart = CTimer::GetClockTicks64 ();

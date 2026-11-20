@@ -57,7 +57,7 @@ STDLIB_UNUSED = --exclude=/libs/mongoose/ --exclude=/libs/mbedtls/ --exclude=/li
 # Changes to umac, applied in this order to each target's copy (the
 # submodule stays untouched; rsync puts back the original of a patched file
 # before each build, so they apply cleanly every time).  See each patch.
-UMAC_PATCHES = patches/umac-rtc-hooks.patch
+UMAC_PATCHES = patches/umac-rtc-hooks.patch patches/umac-sound-hooks.patch
 
 # Copies keep their build output (excluded files are never deleted)
 RSYNC_SRC = rsync -a --delete --exclude=.git --exclude='*.o' --exclude='*.d' \

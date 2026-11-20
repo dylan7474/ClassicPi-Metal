@@ -22,6 +22,10 @@
 #include <circle/net/mdnspublisher.h>
 #include <circle/startup.h>
 #include <circle/netdevice.h>
+#include <circle/sound/soundbasedevice.h>
+#if RASPPI <= 4
+#include <circle/sound/hdmisoundbasedevice.h>
+#endif
 #include "webserver.h"
 #include <circle/net/ipaddress.h>
 #include <circle/sched/task.h>
@@ -152,6 +156,7 @@ CKernel::CKernel (void)
 	m_nNetYieldUs (10000),
 	m_bClockDirty (false),
 	m_nClockChanged (0),
+	m_pSound (0),
 	m_bSDOK (false),
 	m_bScreenOK (false),
 	m_bScaleFallback (false),
@@ -825,6 +830,72 @@ void CKernel::UpdateNetwork (u64 nNow)
 	}
 }
 
+// ---- Sound over HDMI -----------------------------------------------------------
+// The Mac Plus sound (mac_sound.c) to the screen's speakers.  Circle's HDMI
+// sound works on the Pi 1-4 and Zeros (HDMI0), not the Pi 5.  Each frame
+// the main loop writes enough 48 kHz stereo to keep the queue ~50 ms deep,
+// so the Pi's 60 Hz and HDMI's 48 kHz never drift apart.  cmdline.txt
+// sound=off turns it off.
+
+#define SOUND_RATE		48000
+#define SOUND_QUEUE_MS		200		// room in the queue
+#define SOUND_TARGET_FRAMES	(SOUND_RATE / 20)	// keep ~50 ms queued
+#define SOUND_MAX_WRITE		1600		// frames per call (2 video frames)
+
+void CKernel::StartSound (void)
+{
+#if RASPPI <= 4
+	if (strcmp (mOptions.GetAppOptionString ("sound", "hdmi"), "off") == 0)
+	{
+		Log ("Sound: off (sound=off in cmdline.txt)");
+		return;
+	}
+	if (!m_bScreenOK)
+	{
+		Log ("Sound: off (HDMI not running)");
+		return;
+	}
+	CHDMISoundBaseDevice *pSound = new CHDMISoundBaseDevice (&mInterrupt, SOUND_RATE, 384 * 10);
+	if (pSound == 0 || !pSound->AllocateQueue (SOUND_QUEUE_MS))
+	{
+		Log ("Sound: cannot start HDMI sound");
+		return;			// left alone: its destructor resets HDMI
+	}
+	pSound->SetWriteFormat (SoundFormatSigned16, 2);
+	if (!pSound->Start ())
+	{
+		Log ("Sound: cannot start HDMI sound");
+		return;			// left alone: its destructor resets HDMI
+	}
+	m_pSound = pSound;
+	Log ("Sound: HDMI, %u Hz (sound=off in cmdline.txt turns it off)", SOUND_RATE);
+#else
+	Log ("Sound: none (Circle has no HDMI sound on the Pi 5)");
+#endif
+}
+
+void CKernel::FeedSound (void)
+{
+	if (m_pSound == 0)
+	{
+		return;
+	}
+	CSoundBaseDevice *pSound = (CSoundBaseDevice *) m_pSound;
+	unsigned nQueued = pSound->GetQueueSizeFrames () - pSound->GetQueueFramesAvail ();
+	unsigned nWrite = nQueued < SOUND_TARGET_FRAMES ? SOUND_TARGET_FRAMES - nQueued : 0;
+	if (nWrite < SOUND_RATE / 120)
+	{
+		nWrite = SOUND_RATE / 120;	// at least half a frame's worth, always
+	}
+	if (nWrite > SOUND_MAX_WRITE)
+	{
+		nWrite = SOUND_MAX_WRITE;
+	}
+	static s16 Buffer[SOUND_MAX_WRITE * 2];
+	emu_sound_render (Buffer, nWrite);
+	pSound->Write (Buffer, nWrite * 2 * sizeof (s16));
+}
+
 bool CKernel::LoadROM (void)
 {
 	static u8 ROM[EMU_ROM_SIZE] __attribute__((aligned(64)));
@@ -1430,6 +1501,7 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 		Fatal ("Not enough memory for the Mac's %u KB of RAM.", emu_ram_kb ());
 	}
 
+	StartSound ();
 	Log ("Mac:  started");
 
 	// From here the screen belongs to the Mac (no pause for the banner:
@@ -1487,6 +1559,7 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 
 		if (nNow >= nNextVsync)
 		{
+			FeedSound ();		// this frame's sound, before the Mac's VBL
 			emu_vsync ();
 			Blit (false);
 			nNextVsync += VSYNC_US;

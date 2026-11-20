@@ -133,6 +133,16 @@ const uint8_t *emu_framebuffer(void)
         return mac_ram + umac_get_fb_offset();
 }
 
+const uint8_t *emu_ram_base(void)          /* for mac_sound.c */
+{
+        return mac_ram;
+}
+
+uint32_t emu_ram_size(void)
+{
+        return RAM_SIZE;
+}
+
 unsigned emu_ram_kb(void)
 {
         return UMAC_MEMSIZE;

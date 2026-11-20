@@ -1,0 +1,39 @@
+# Pass VIA ports A and B out of umac for the Mac Plus sound output.
+#
+# umac keeps the VIA's port values to itself, and has no sound.  The Mac
+# Plus plays one byte per scan line from a buffer in RAM (370 per frame);
+# port A bits 0-2 set the volume and bit 3 picks the main or alternate
+# buffer, port B bit 7 is 0 for sound on.  These two globals let
+# ClassicPi-Metal's src/mac_sound.c read them.  Apply after
+# umac-rtc-hooks.patch (same function).
+#
+--- a/src/main.c	2026-11-20 20:03:03.207019002 +0000
++++ b/src/main.c	2026-11-20 20:03:14.053127322 +0000
+@@ -140,6 +140,11 @@
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+ // VIA-related controls
++/* ClassicPi-Metal: VIA port values for the sound output (mac_sound.c):
++ * A[2:0] volume, A[3] = 1 main buffer / 0 alternate, B[7] = 0 sound on */
++uint8_t umac_via_pa = 0x7b;             /* the ROM's vAInit: main buffer, volume 3 */
++uint8_t umac_via_pb = 0x80;             /* sound off until the ROM says otherwise */
++
+ static void     via_ra_changed(uint8_t val)
+ {
+         static uint8_t oldval = 0x10;
+@@ -149,6 +154,7 @@
+         // 4 = overlay
+         // 3 = snd.pg2 (sound buffer select)
+         // [2:0] = sound volume
++        umac_via_pa = val;              /* ClassicPi-Metal: sound */
+         overlay = !!(val & 0x10);
+         if ((oldval ^ val) & 0x10) {
+                 MDBG("OVERLAY CHANGING\n");
+@@ -171,6 +177,7 @@
+         // 3 = mouse7 (in, 0 = button pressed)
+         // [2:0] = RTC controls
+         umac_rtc_lines(val & 7);        /* ClassicPi-Metal: mac_rtc.c */
++        umac_via_pb = val;              /* ClassicPi-Metal: sound */
+ }
+ 
+ static uint8_t  via_ra_in(void)

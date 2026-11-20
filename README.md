@@ -46,6 +46,14 @@ which runs Mini vMac on a Buildroot Linux image.
   never waits for it. Once the time is in, the network stops being given
   turns, so it costs the Mac nothing. Without Wi-Fi the clock carries on
   from `pram.dat` (the Pi has no clock of its own while it's off).
+- **Sound over HDMI:** the Mac Plus sound (one byte per scan line from its
+  sound buffer: the start-up beep, alert sounds, games) goes to the screen's
+  speakers through Circle's HDMI sound, on the Zero W, Zero 2 W and Pi 1-4
+  (not the Pi 5, where Circle has no HDMI sound). umac had no sound;
+  `src/mac_sound.c` reads the buffer once a frame, wired in by
+  `patches/umac-sound-hooks.patch`. `sound=off` in `cmdline.txt` turns it
+  off. No sound on a monitor that has speakers: the Pi may have picked DVI
+  mode; add `hdmi_drive=2` to `config.txt`.
 - **Disk images over the network:** once connected, the Pi serves a page at
   `http://classicpi.local/` (or its IP address, in `bootlog-<board>.txt`):
   list the disk images on the card, download one, upload one (streamed
@@ -233,7 +241,7 @@ the screen rows that changed.
 1. ~~**First boot on real hardware**~~: done 2026-11-20 on a Zero W and a Zero 2 W (see the table at the top). Still to check: speed at 3x on the Zero W, mouse feel, and long-term SD write behaviour.
 2. **Universal card on real boards:** every kernel is built and on the card. The Pi 2, 4 and 5 kernels can't be fully tested in QEMU, so each needs a first boot on a real board. On the Pi 4, check the SD card first (QEMU couldn't open it).
 3. **Speed**, if it needs it: run the blit on a second core, and mark the hot 68000 opcodes (`tools/fn_hot200.txt` in umac).
-4. **Sound:** the Mac Plus sound buffer to PWM or I2S audio (the Phonosphere MAX98357A amp would do). umac has no sound yet, so this needs work in the core.
+4. ~~**Sound**~~: over HDMI since 2026-11-20 (see above). Still possible: PWM or I2S audio for a screen without speakers (the Phonosphere MAX98357A amp would do).
 5. **Insert a floppy while the Mac runs** (proposed 2026-11-20, not started): an "Insert" button on the web page puts a floppy image in a second drive, its icon appears on the running System 7 desktop, and ejecting it on the Mac empties the drive for the next one. Needs, as patches to umac: the second drive (the C side plus umac's 68000 driver stub, rebuilt with an m68k assembler), telling the Mac a disk was inserted (umac's driver says "accRun: Not supported"; Basilisk II, where it comes from, shows how), and eject without restarting the Mac. Floppies then don't need to be bootable. An on-screen picker (hot key) could use the same path.
 6. **VIA timers:** missing in umac, so some games run too fast, and some old System floppies stop at "Welcome to Macintosh" (an archive.org games floppy did, on the Pi and in desktop umac alike).
 7. **Mac TCP/IP:** MacTCP over SLIP/PPP on an emulated serial port, with a slirp-style NAT on the Pi (step 3 of the network plan).

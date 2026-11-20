@@ -57,6 +57,11 @@ void    emu_run_slice(void);
  * as fast as the host allows, so slices per second x this = Mac speed. */
 unsigned emu_slice_us(void);
 
+/* Sound (mac_sound.c): the Mac's current frame of sound (370 samples at
+ * 22.25 kHz) as `frames` stereo 16-bit frames, stretched to fit (about 800
+ * for 48 kHz at 60 Hz).  Call once per frame, just before emu_vsync(). */
+void    emu_sound_render(int16_t *out, unsigned frames);
+
 /* Time events: call at 60 Hz and 1 Hz. */
 void    emu_vsync(void);
 void    emu_1hz(void);

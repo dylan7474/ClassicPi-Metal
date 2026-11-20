@@ -59,6 +59,10 @@ private:
 	void StartWiFi (void);
 	void UpdateNetwork (u64 nNow);
 	u32 UnixToMac (unsigned nUnix);
+
+	// Sound over HDMI (Pi 1-4, Zeros)
+	void StartSound (void);
+	void FeedSound (void);
 	void WriteSpeedFile (unsigned nPercent);
 
 	// Display
@@ -102,6 +106,8 @@ private:
 	char		m_TimeZone[64];		// cmdline.txt tz= (POSIX TZ)
 	bool		m_bClockDirty;		// PRAM/clock changed, save soon
 	u64		m_nClockChanged;
+
+	void		*m_pSound;		// CHDMISoundBaseDevice, or 0 (no sound)
 
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started

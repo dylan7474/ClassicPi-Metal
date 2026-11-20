@@ -14,7 +14,7 @@ GEN     ?= ../gen
 # Mac RAM in KB: 4096 = 4 MB Mac Plus (System 7 needs 2048 or more)
 MEMSIZE ?= 4096
 
-OBJS = main.o kernel.o emu_glue.o keymap_usb.o mac_rtc.o webserver.o \
+OBJS = main.o kernel.o emu_glue.o keymap_usb.o mac_rtc.o mac_sound.o webserver.o \
        $(UMAC)/src/main.o $(UMAC)/src/disc.o $(UMAC)/src/rom.o \
        $(UMAC)/src/scc.o $(UMAC)/src/via.o \
        $(MUSASHI)/m68kcpu.o $(MUSASHI)/m68kdasm.o \
@@ -30,6 +30,6 @@ OPTIMIZE = -O3
 
 # Wi-Fi (time from NTP): Circle's WLAN driver + WPA supplicant
 LIBS := $(CIRCLEHOME)/addon/wlan/hostap/wpa_supplicant/libwpa_supplicant.a \
-	$(CIRCLEHOME)/addon/wlan/libwlan.a $(CIRCLE_STDLIB_LIBS)
+	$(CIRCLEHOME)/addon/wlan/libwlan.a $(CIRCLEHOME)/lib/sound/libsound.a $(CIRCLE_STDLIB_LIBS)
 
 -include $(DEPS)

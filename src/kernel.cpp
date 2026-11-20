@@ -19,6 +19,10 @@
 #include <circle/util.h>
 #include <circle/net/dnsclient.h>
 #include <circle/net/ntpclient.h>
+#include <circle/net/mdnspublisher.h>
+#include <circle/startup.h>
+#include <circle/netdevice.h>
+#include "webserver.h"
 #include <circle/net/ipaddress.h>
 #include <circle/sched/task.h>
 #include <circle/string.h>
@@ -142,6 +146,8 @@ CKernel::CKernel (void)
 	m_pNet (0),
 	m_pWPASupplicant (0),
 	m_bNetActive (false),
+	m_bTimeDone (false),
+	m_bWeb (false),
 	m_nNetStart (0),
 	m_bClockDirty (false),
 	m_nClockChanged (0),
@@ -431,7 +437,8 @@ void CKernel::Fatal (const char *pFormat, ...)
 #define WIFI_FIRMWARE	"SD:/firmware/"
 #define HOSTNAME	"classicpi"
 #define NET_GIVE_UP_US	120000000	// stop the network after 2 min without time
-#define NET_YIELD_US	10000		// give the network tasks a turn every 10 ms
+#define NET_YIELD_US	10000		// network turns every 10 ms while joining + NTP
+#define NET_IDLE_US	50000		// then every 50 ms (web page idle): cheaper for the Mac
 
 static volatile bool s_bClockChanged;
 
@@ -565,7 +572,7 @@ public:
 		}
 		CString IP;
 		m_pNet->GetConfig ()->GetIPAddress ()->Format (&IP);
-		CLogger::Get ()->Write ("cpmetal", LogNotice, "Wi-Fi: connected, IP address %s",
+		CLogger::Get ()->Write ("cpmetal", LogNotice, "Network: connected, IP address %s",
 					(const char *) IP);
 
 		for (unsigned nTry = 0; nTry < 5 && s_nNTPTime == 0; nTry++)
@@ -590,45 +597,132 @@ private:
 	const char *m_pServer;
 };
 
-// Only with SD:/wpa_supplicant.conf and a Wi-Fi chip whose firmware is in
-// SD:/firmware/; cmdline.txt wifi=off turns it off.
+// classicpi.local and the page in the network's service list (mDNS), once
+// the network is up
+class CNameTask : public CTask
+{
+public:
+	CNameTask (CNetSubSystem *pNet) : m_pNet (pNet)
+	{
+		SetName ("mdns");
+	}
+
+	void Run (void) override
+	{
+		while (!m_pNet->IsRunning ())
+		{
+			CScheduler::Get ()->MsSleep (200);
+		}
+		CmDNSPublisher *pmDNS = new CmDNSPublisher (m_pNet);
+		if (pmDNS != 0)
+		{
+			pmDNS->PublishService ("ClassicPi-Metal", "_http._tcp", 80);
+		}
+	}
+
+private:
+	CNetSubSystem *m_pNet;
+};
+
+// The network: Wi-Fi with SD:/wpa_supplicant.conf (and a Wi-Fi chip whose
+// firmware is in SD:/firmware/), otherwise wired Ethernet if the board has
+// it (Pi 3B/3B+/4 with a cable, a USB adapter, QEMU's usb-net).
+// cmdline.txt wifi=off: no network at all; web=off: no disk-images page.
 void CKernel::StartWiFi (void)
 {
-	const char *pWiFi = mOptions.GetAppOptionString ("wifi", "on");
-	FILINFO Info;
-	if (strcmp (pWiFi, "off") == 0 || f_stat (WIFI_CONFIG, &Info) != FR_OK)
+	if (strcmp (mOptions.GetAppOptionString ("wifi", "on"), "off") == 0)
 	{
-		Log ("Wi-Fi: off (%s)", strcmp (pWiFi, "off") == 0 ? "wifi=off in cmdline.txt"
-							   : "no wpa_supplicant.conf on the card");
+		Log ("Network: off (wifi=off in cmdline.txt)");
 		return;
 	}
 
-	m_pWLAN = new CBcm4343Device (WIFI_FIRMWARE);
-	if (m_pWLAN == 0 || !m_pWLAN->Initialize ())
+	FILINFO Info;
+	bool bWiFi = f_stat (WIFI_CONFIG, &Info) == FR_OK;
+	if (bWiFi)
 	{
-		Log ("Wi-Fi: no Wi-Fi chip on this board, or its firmware is not in /firmware");
-		m_pWLAN = 0;			// a half-started driver is left alone
+		m_pWLAN = new CBcm4343Device (WIFI_FIRMWARE);
+		if (m_pWLAN == 0 || !m_pWLAN->Initialize ())
+		{
+			Log ("Wi-Fi: no Wi-Fi chip on this board, or its firmware is not in /firmware");
+			m_pWLAN = 0;		// a half-started driver is left alone
+			bWiFi = false;
+		}
+	}
+
+	// Without Wi-Fi, only if there is a wired network device (USB found it)
+	if (!bWiFi && CNetDevice::GetNetDevice (NetDeviceTypeEthernet) == 0)
+	{
+		Log ("Network: off (no wpa_supplicant.conf, and no wired Ethernet on this board)");
 		return;
 	}
-	m_pNet = new CNetSubSystem (0, 0, 0, 0, HOSTNAME, NetDeviceTypeWLAN);
+
+	// Fixed address instead of DHCP: cmdline.txt ip= netmask= gateway= dns=
+	static u8 IP[4], Mask[4] = { 255, 255, 255, 0 }, Gateway[4], DNS[4];
+	bool bStatic = false;
+	{
+		auto Parse = [this] (const char *pOption, u8 *pOut) -> bool
+		{
+			const char *p = mOptions.GetAppOptionString (pOption, 0);
+			unsigned a, b, c, d;
+			if (p == 0 || sscanf (p, "%u.%u.%u.%u", &a, &b, &c, &d) != 4)
+			{
+				return false;
+			}
+			pOut[0] = a; pOut[1] = b; pOut[2] = c; pOut[3] = d;
+			return true;
+		};
+		bStatic = Parse ("ip", IP);
+		if (bStatic)
+		{
+			Parse ("netmask", Mask);
+			if (!Parse ("gateway", Gateway))
+			{
+				memcpy (Gateway, IP, 3); Gateway[3] = 1;
+			}
+			if (!Parse ("dns", DNS))
+			{
+				memcpy (DNS, Gateway, 4);
+			}
+			Log ("Network: fixed address %u.%u.%u.%u (gateway %u.%u.%u.%u)",
+			     IP[0], IP[1], IP[2], IP[3], Gateway[0], Gateway[1], Gateway[2], Gateway[3]);
+		}
+	}
+
+	m_pNet = new CNetSubSystem (bStatic ? IP : 0, bStatic ? Mask : 0,
+				    bStatic ? Gateway : 0, bStatic ? DNS : 0, HOSTNAME,
+				    bWiFi ? NetDeviceTypeWLAN : NetDeviceTypeEthernet);
 	if (m_pNet == 0 || !m_pNet->Initialize (FALSE))
 	{
-		Log ("Wi-Fi: network start failed");
+		Log (bWiFi ? "Wi-Fi: network start failed"
+			   : "Network: no wpa_supplicant.conf, and no wired Ethernet on this board");
 		m_pNet = 0;
 		return;
 	}
-	m_pWPASupplicant = new CWPASupplicant (WIFI_CONFIG);
-	if (m_pWPASupplicant == 0 || !m_pWPASupplicant->Initialize ())
+
+	if (bWiFi)
 	{
-		Log ("Wi-Fi: cannot start WPA (check %s)", WIFI_CONFIG + 4);
-		m_pWPASupplicant = 0;
-		return;
+		m_pWPASupplicant = new CWPASupplicant (WIFI_CONFIG);
+		if (m_pWPASupplicant == 0 || !m_pWPASupplicant->Initialize ())
+		{
+			Log ("Wi-Fi: cannot start WPA (check %s)", WIFI_CONFIG + 4);
+			m_pWPASupplicant = 0;
+			return;
+		}
 	}
 
 	new CTimeTask (m_pNet, m_NTPServer);
 	m_bNetActive = true;
 	m_nNetStart = CTimer::GetClockTicks64 ();
-	Log ("Wi-Fi: joining; the Mac's clock is set from %s when it answers", m_NTPServer);
+	Log ("%s: joining; the Mac's clock is set from %s when it answers",
+	     bWiFi ? "Wi-Fi" : "Ethernet", m_NTPServer);
+
+	m_bWeb = strcmp (mOptions.GetAppOptionString ("web", "on"), "off") != 0;
+	if (m_bWeb)
+	{
+		new CWebTask (m_pNet, 80);
+		new CNameTask (m_pNet);
+		Log ("Web:  disk images page on port 80 once connected (web=off turns it off)");
+	}
 }
 
 // Main loop: give the network a turn now and then until the time is in
@@ -646,21 +740,49 @@ void CKernel::UpdateNetwork (u64 nNow)
 		SaveClock ();
 	}
 
+	// Requests from the web page (it runs as a task; the Mac's disk is ours)
+	if (g_Web.bSyncRequest)
+	{
+		g_Web.bSyncRequest = false;
+		if (m_bDiskOpen)
+		{
+			f_sync (&m_DiskFile);
+			s_bDiskDirty = false;
+		}
+		g_Web.bSynced = true;
+	}
+	if (g_Web.bRestartRequest)
+	{
+		Log ("Web:  restart requested");
+		if (m_bDiskOpen)
+		{
+			f_close (&m_DiskFile);
+		}
+		SaveClock ();
+		FlushBootLog ();
+		reboot ();
+	}
+
 	if (!m_bNetActive)
 	{
 		return;
 	}
 
+	// A turn for the network tasks: every 10 ms until the clock is set,
+	// then every 50 ms for the web page; every pass while a download or
+	// upload runs (the Mac slows down meanwhile)
 	static u64 nNextYield;
-	if (nNow >= nNextYield)
+	if (g_Web.nTransfers > 0 || nNow >= nNextYield)
 	{
 		m_Scheduler.Yield ();
-		nNextYield = CTimer::GetClockTicks64 () + NET_YIELD_US;
+		nNextYield = CTimer::GetClockTicks64 () + (m_bTimeDone ? NET_IDLE_US : NET_YIELD_US);
 	}
 
-	if (s_bNTPDone || nNow - m_nNetStart > NET_GIVE_UP_US)
+	if (!m_bTimeDone && (s_bNTPDone || nNow - m_nNetStart > NET_GIVE_UP_US))
 	{
-		m_bNetActive = false;		// no more turns: no cost to the Mac
+		m_bTimeDone = true;
+		// Keep giving turns only for the page, and only if we're connected
+		m_bNetActive = m_bWeb && m_pNet != 0 && m_pNet->IsRunning ();
 		if (s_nNTPTime != 0)
 		{
 			u32 nMac = UnixToMac (s_nNTPTime);
@@ -672,7 +794,7 @@ void CKernel::UpdateNetwork (u64 nNow)
 		}
 		else
 		{
-			Log ("Wi-Fi: no time from %s (not joined, or no answer)", m_NTPServer);
+			Log ("Network: no time from %s (not connected, or no answer)", m_NTPServer);
 		}
 		FlushBootLog ();
 	}
@@ -727,8 +849,36 @@ bool CKernel::LoadROM (void)
 
 bool CKernel::OpenDisk (void)
 {
+	// First the disk chosen on the web page (SD:/disk.txt), then the defaults
+	static char ChosenPath[96];
+	const char *Candidates[1 + sizeof DiskNames / sizeof DiskNames[0]];
+	unsigned nCandidates = 0;
+	{
+		FIL File;
+		char Name[80];
+		UINT nRead = 0;
+		if (f_open (&File, BOOT_DISK_FILE, FA_READ) == FR_OK)
+		{
+			f_read (&File, Name, sizeof Name - 1, &nRead);
+			f_close (&File);
+		}
+		Name[nRead] = '\0';
+		Name[strcspn (Name, "\r\n")] = '\0';
+		if (Name[0] != '\0' && strpbrk (Name, "/\\:") == 0)
+		{
+			snprintf (ChosenPath, sizeof ChosenPath, "SD:/%s", Name);
+			Candidates[nCandidates++] = ChosenPath;
+		}
+	}
 	for (const char *pName : DiskNames)
 	{
+		Candidates[nCandidates++] = pName;
+	}
+
+	for (unsigned i = 0; i < nCandidates; i++)
+	{
+		const char *pName = Candidates[i];
+		bool bChosen = pName == ChosenPath;
 		bool bReadOnly = false;
 		FRESULT Result = f_open (&m_DiskFile, pName, FA_READ | FA_WRITE);
 		if (Result == FR_DENIED || Result == FR_WRITE_PROTECTED)
@@ -738,10 +888,22 @@ bool CKernel::OpenDisk (void)
 		}
 		if (Result != FR_OK)
 		{
+			if (bChosen)
+			{
+				Say ("Disk: %s (chosen in %s) not found; using the default",
+				     pName + 4, BOOT_DISK_FILE + 4);
+			}
 			continue;
 		}
 
 		FSIZE_t nSize = f_size (&m_DiskFile);
+		if ((nSize == 0 || (nSize & 511) != 0) && bChosen)
+		{
+			f_close (&m_DiskFile);
+			Say ("Disk: %s (chosen in %s) is not a raw disk image; using the default",
+			     pName + 4, BOOT_DISK_FILE + 4);
+			continue;
+		}
 		if (nSize == 0 || (nSize & 511) != 0)
 		{
 			f_close (&m_DiskFile);
@@ -753,6 +915,7 @@ bool CKernel::OpenDisk (void)
 		m_bDiskOpen = true;
 		m_nDiskSize = (u32) nSize;
 		m_pDiskName = pName + 4;
+		g_Web.pDiskInUse = m_pDiskName;	// the page won't replace or delete it
 		Say ("Disk: %s, %u MB%s", m_pDiskName, (unsigned) (nSize >> 20),
 		     bReadOnly ? ", READ-ONLY" : "");
 		return bReadOnly;

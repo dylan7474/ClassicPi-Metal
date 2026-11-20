@@ -46,6 +46,14 @@ which runs Mini vMac on a Buildroot Linux image.
   never waits for it. Once the time is in, the network stops being given
   turns, so it costs the Mac nothing. Without Wi-Fi the clock carries on
   from `pram.dat` (the Pi has no clock of its own while it's off).
+- **Disk images over the network:** once connected, the Pi serves a page at
+  `http://classicpi.local/` (or its IP address, in `bootlog-<board>.txt`):
+  list the disk images on the card, download one, upload one (streamed
+  straight to the card), delete one, and choose the disk the Mac starts
+  from next time (`disk.txt`), with a button to restart the Pi. The disk
+  the Mac is using can't be replaced or deleted while it runs. No login:
+  it's for your own network. A Pi 3B/3B+/4 with a network cable and no
+  `wpa_supplicant.conf` uses the cable instead of Wi-Fi.
 - **Per-board files:** `<board>` is the model, e.g. `zero-2-w`, `zero-w`,
   `3-model-b`, so one card can go round several boards and keep each one's
   results. Each boot of the same board overwrites its own files.
@@ -78,6 +86,7 @@ Use a FAT32 card (one partition). Run `make sdcard` and copy everything from
 | `wpa_supplicant.conf` | **Yours, optional:** your Wi-Fi name and password (copy `wpa_supplicant.conf.example`) for the Mac's clock from NTP |
 | `firmware/` | Wi-Fi chip firmware (downloaded by `make sdcard`) |
 | `pram.dat` | Written by the Pi: the Mac's PRAM settings and clock |
+| `disk.txt` | Written by the web page: the disk image to start from (optional; otherwise `disk1.dsk`) |
 | `speed-<board>.txt`, `bootlog-<board>.txt` | Written by the Pi (see below); safe to delete |
 
 The ROM and System software are Apple's copyright, so they are never in this
@@ -105,7 +114,15 @@ draws one size smaller and logs why; once that works it stays there
 
 **Clock options** (on the single line in `cmdline.txt`):
 `tz=` POSIX time zone, default `GMT0BST,M3.5.0/1,M10.5.0` (UK);
-`ntp=` time server, default `pool.ntp.org`; `wifi=off` to skip Wi-Fi.
+`ntp=` time server, default `pool.ntp.org`; `wifi=off` for no network at
+all; `web=off` for no disk-images page (the network then stops once the
+clock is set); `ip=` (with optional `netmask=`, `gateway=`, `dns=`) for a
+fixed address instead of DHCP.
+
+**What the network costs the Mac:** while it joins and asks for the time,
+the network gets a turn every 10 ms (about 8% of the Mac's speed on a
+Zero 2 W); afterwards, for the web page, every 50 ms; during a download or
+upload, all it needs (the Mac slows down until it finishes).
 
 **Never add `gpu_mem=16`.** It makes the firmware look for the cut-down
 `start_cd.elf` / `start4cd.elf`, which aren't on the card, and the Pi then

@@ -94,6 +94,8 @@ private:
 	CNetSubSystem	*m_pNet;
 	CWPASupplicant	*m_pWPASupplicant;
 	bool		m_bNetActive;		// main loop still yields to the network
+	bool		m_bTimeDone;		// NTP answered or given up
+	bool		m_bWeb;			// disk-images page on (cmdline web=)
 	u64		m_nNetStart;
 	char		m_NTPServer[64];	// cmdline.txt ntp=
 	char		m_TimeZone[64];		// cmdline.txt tz= (POSIX TZ)

@@ -135,8 +135,8 @@ CKernel::CKernel (void)
 	m_LogTee (&mSerial),
 	m_bSDOK (false),
 	m_bScreenOK (false),
-	m_pKeyboard (0),
-	m_pMouse (0),
+	m_nUSBLogFlushes (0),
+	m_bUSBRemoved (false),
 	m_pROM (0),
 	m_bDiskOpen (false),
 	m_nDiskSize (0),
@@ -144,6 +144,11 @@ CKernel::CKernel (void)
 	m_pFB (0)
 {
 	s_pThis = this;
+	for (unsigned i = 0; i < MAX_INPUTS; i++)
+	{
+		m_pKeyboards[i] = 0;
+		m_pMice[i] = 0;
+	}
 }
 
 // Our own start-up order (not CStdlibAppScreen::Initialize, which gives up
@@ -519,44 +524,118 @@ void CKernel::Blit (bool bForce)
 	}
 }
 
+// Several keyboards and mice can be in use at once (a keyboard often shows
+// up as more than one device, e.g. ukbd1 + ukbd2, and so do wireless
+// keyboard/mouse receivers).  Each has a slot with its own key state.
+static unsigned char s_ucOldModifiers[MAX_INPUTS];
+static unsigned char s_OldKeys[MAX_INPUTS][6];
+static volatile unsigned s_nMouseButtonsOf[MAX_INPUTS];
+
+static bool Holds (CDevice * volatile const *pSlots, CDevice *pDevice)
+{
+	for (unsigned i = 0; i < MAX_INPUTS; i++)
+	{
+		if (pSlots[i] == pDevice)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 void CKernel::UpdateUSB (void)
 {
 	if (!m_USBHCI.UpdatePlugAndPlay ())
 	{
+		// A removal may not count as an update, but its handler has run
+		if (m_bUSBRemoved)
+		{
+			m_bUSBRemoved = false;
+			Log ("USB:  now %u keyboard(s), %u mouse/mice",
+			     CountInputs ((CDevice * volatile *) m_pKeyboards),
+			     CountInputs ((CDevice * volatile *) m_pMice));
+			if (m_nUSBLogFlushes < USB_LOG_FLUSHES)
+			{
+				m_nUSBLogFlushes++;
+				FlushBootLog ();
+			}
+		}
 		return;
 	}
+	m_bUSBRemoved = false;
 
-	if (m_pKeyboard == 0)
+	for (unsigned n = 1; n <= MAX_INPUTS; n++)
 	{
+		char Name[16];
+
+		snprintf (Name, sizeof Name, "ukbd%u", n);
 		CUSBKeyboardDevice *pKeyboard =
-			(CUSBKeyboardDevice *) mDeviceNameService.GetDevice ("ukbd1", FALSE);
-		if (pKeyboard != 0)
+			(CUSBKeyboardDevice *) mDeviceNameService.GetDevice (Name, FALSE);
+		if (pKeyboard != 0 && !Holds ((CDevice * volatile *) m_pKeyboards, pKeyboard))
 		{
-			pKeyboard->RegisterRemovedHandler (KeyRemovedHandler, this);
-			pKeyboard->RegisterKeyStatusHandlerRaw (KeyStatusHandler);
-			m_pKeyboard = pKeyboard;
-			mLogger.Write (FROM, LogNotice, "Keyboard attached");
+			for (unsigned i = 0; i < MAX_INPUTS; i++)
+			{
+				if (m_pKeyboards[i] == 0)
+				{
+					s_ucOldModifiers[i] = 0;
+					memset (s_OldKeys[i], 0, 6);
+					m_pKeyboards[i] = pKeyboard;
+					pKeyboard->RegisterRemovedHandler (KeyRemovedHandler, (void *) (uintptr) i);
+					pKeyboard->RegisterKeyStatusHandlerRaw (KeyStatusHandler, FALSE,
+										(void *) (uintptr) i);
+					Log ("USB:  keyboard %s attached", Name);
+					break;
+				}
+			}
+		}
+
+		snprintf (Name, sizeof Name, "mouse%u", n);
+		CMouseDevice *pMouse = (CMouseDevice *) mDeviceNameService.GetDevice (Name, FALSE);
+		if (pMouse != 0 && !Holds ((CDevice * volatile *) m_pMice, pMouse))
+		{
+			for (unsigned i = 0; i < MAX_INPUTS; i++)
+			{
+				if (m_pMice[i] == 0)
+				{
+					s_nMouseButtonsOf[i] = 0;
+					m_pMice[i] = pMouse;
+					pMouse->RegisterRemovedHandler (MouseRemovedHandler, (void *) (uintptr) i);
+					pMouse->RegisterStatusHandler (MouseStatusHandler, (void *) (uintptr) i);
+					Log ("USB:  mouse %s attached", Name);
+					break;
+				}
+			}
 		}
 	}
 
-	if (m_pMouse == 0)
+	Log ("USB:  devices changed; now %u keyboard(s), %u mouse/mice",
+	     CountInputs ((CDevice * volatile *) m_pKeyboards),
+	     CountInputs ((CDevice * volatile *) m_pMice));
+
+	// Hot-plug events go to the card even after the first minute (capped)
+	if (m_nUSBLogFlushes < USB_LOG_FLUSHES)
 	{
-		CMouseDevice *pMouse = (CMouseDevice *) mDeviceNameService.GetDevice ("mouse1", FALSE);
-		if (pMouse != 0)
-		{
-			pMouse->RegisterRemovedHandler (MouseRemovedHandler, this);
-			pMouse->RegisterStatusHandler (MouseStatusHandler);
-			m_pMouse = pMouse;
-			mLogger.Write (FROM, LogNotice, "Mouse attached");
-		}
+		m_nUSBLogFlushes++;
+		FlushBootLog ();
 	}
 }
 
-// Interrupt context: turn a USB report into key down/up events.
-void CKernel::KeyStatusHandler (unsigned char ucModifiers, const unsigned char RawKeys[6])
+unsigned CKernel::CountInputs (CDevice * volatile const *pSlots)
 {
-	static unsigned char ucOldModifiers;
-	static unsigned char OldKeys[6];
+	unsigned nCount = 0;
+	for (unsigned i = 0; i < MAX_INPUTS; i++)
+	{
+		nCount += pSlots[i] != 0;
+	}
+	return nCount;
+}
+
+// Interrupt context: turn a USB report into key down/up events.
+void CKernel::KeyStatusHandler (unsigned char ucModifiers, const unsigned char RawKeys[6], void *pArg)
+{
+	unsigned nSlot = (unsigned) (uintptr) pArg;
+	unsigned char &ucOldModifiers = s_ucOldModifiers[nSlot];
+	unsigned char *OldKeys = s_OldKeys[nSlot];
 
 	unsigned char ucChanged = ucModifiers ^ ucOldModifiers;
 	for (unsigned i = 0; i < 8; i++)
@@ -614,24 +693,46 @@ void CKernel::KeyStatusHandler (unsigned char ucModifiers, const unsigned char R
 	memcpy (OldKeys, RawKeys, 6);
 }
 
+// Called inside UpdatePlugAndPlay() (task level) when a keyboard is unplugged:
+// release whatever it was holding down, so no key or modifier sticks.
 void CKernel::KeyRemovedHandler (CDevice *pDevice, void *pContext)
 {
-	CKernel *pThis = (CKernel *) pContext;
-	pThis->m_pKeyboard = 0;
+	unsigned nSlot = (unsigned) (uintptr) pContext;
+	for (unsigned i = 0; i < 8; i++)
+	{
+		if (s_ucOldModifiers[nSlot] & (1 << i))
+		{
+			QueueKey (0xE0 + i, false);
+		}
+	}
+	for (unsigned i = 0; i < 6; i++)
+	{
+		if (s_OldKeys[nSlot][i] > 0x01)
+		{
+			QueueKey (s_OldKeys[nSlot][i], false);
+		}
+	}
+	s_ucOldModifiers[nSlot] = 0;
+	memset (s_OldKeys[nSlot], 0, 6);
+	s_pThis->m_pKeyboards[nSlot] = 0;
+	s_pThis->Log ("USB:  a keyboard was unplugged");
+	s_pThis->m_bUSBRemoved = true;
 }
 
-void CKernel::MouseStatusHandler (unsigned nButtons, int nDX, int nDY, int nWheel)
+void CKernel::MouseStatusHandler (unsigned nButtons, int nDX, int nDY, int nWheel, void *pArg)
 {
 	s_nMouseDX += nDX;
 	s_nMouseDY += nDY;
-	s_nMouseButtons = nButtons;
+	s_nMouseButtonsOf[(unsigned) (uintptr) pArg] = nButtons;
 }
 
 void CKernel::MouseRemovedHandler (CDevice *pDevice, void *pContext)
 {
-	CKernel *pThis = (CKernel *) pContext;
-	pThis->m_pMouse = 0;
-	s_nMouseButtons = 0;
+	unsigned nSlot = (unsigned) (uintptr) pContext;
+	s_nMouseButtonsOf[nSlot] = 0;
+	s_pThis->m_pMice[nSlot] = 0;
+	s_pThis->Log ("USB:  a mouse was unplugged");
+	s_pThis->m_bUSBRemoved = true;
 }
 
 void CKernel::DrainInput (void)
@@ -639,7 +740,11 @@ void CKernel::DrainInput (void)
 	EnterCritical ();
 	int nDX = s_nMouseDX;
 	int nDY = s_nMouseDY;
-	unsigned nButtons = s_nMouseButtons;
+	unsigned nButtons = 0;
+	for (unsigned i = 0; i < MAX_INPUTS; i++)
+	{
+		nButtons |= s_nMouseButtonsOf[i];
+	}
 	s_nMouseDX = 0;
 	s_nMouseDY = 0;
 	LeaveCritical ();
@@ -680,8 +785,9 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 		Say ("USB:  failed to start; no keyboard or mouse.");
 	}
 	UpdateUSB ();
-	Say ("USB:  keyboard %s, mouse %s", m_pKeyboard ? "found" : "not found yet",
-	     m_pMouse ? "found" : "not found yet");
+	Say ("USB:  %u keyboard(s), %u mouse/mice found (more can be plugged in later)",
+	     CountInputs ((CDevice * volatile *) m_pKeyboards),
+	     CountInputs ((CDevice * volatile *) m_pMice));
 	FlushBootLog ();
 
 	SetupDisplay ();

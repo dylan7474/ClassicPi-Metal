@@ -26,7 +26,10 @@ which runs Mini vMac on a Buildroot Linux image.
 - System 7.0.1 boots to the Finder from a 200 MB disk image, with 4 MB of Mac RAM.
 - HDMI output: the 512x342 screen is scaled by the largest whole number
   that fits and centred on black (2x on a 1024x768 panel).
-- USB keyboard and mouse, plugged in at any time.
+- USB keyboard and mouse, plugged in at any time, directly or through a hub.
+  Up to four keyboards and four mice at once (many keyboards and wireless
+  receivers show up as more than one device). Plugging in and unplugging are
+  written to `bootlog.txt`.
 - Reads and writes go straight to the disk image file on the SD card.
   Writes are flushed one second after the Mac stops writing.
 - If the ROM is missing or wrong, the screen says so in plain words.

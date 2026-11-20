@@ -14,6 +14,9 @@
 #include <circle/input/mouse.h>
 #include <fatfs/ff.h>
 
+#define MAX_INPUTS	4	// keyboards and mice in use at once
+#define USB_LOG_FLUSHES	40	// boot log rewrites for USB changes per boot
+
 // Circle's logger writes here: every line goes to the UART and into the
 // boot log kept in RAM (flushed to SD:/bootlog.txt at each stage).
 class CLogTee : public CDevice
@@ -51,9 +54,10 @@ private:
 	// Input (handlers run in interrupt context: just queue)
 	void UpdateUSB (void);
 	void DrainInput (void);
-	static void KeyStatusHandler (unsigned char ucModifiers, const unsigned char RawKeys[6]);
+	static unsigned CountInputs (CDevice * volatile const *pSlots);
+	static void KeyStatusHandler (unsigned char ucModifiers, const unsigned char RawKeys[6], void *pArg);
 	static void KeyRemovedHandler (CDevice *pDevice, void *pContext);
-	static void MouseStatusHandler (unsigned nButtons, int nDX, int nDY, int nWheel);
+	static void MouseStatusHandler (unsigned nButtons, int nDX, int nDY, int nWheel, void *pArg);
 	static void MouseRemovedHandler (CDevice *pDevice, void *pContext);
 
 private:
@@ -66,8 +70,10 @@ private:
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started
 
-	CUSBKeyboardDevice * volatile m_pKeyboard;
-	CMouseDevice * volatile m_pMouse;
+	CUSBKeyboardDevice * volatile m_pKeyboards[MAX_INPUTS];	// slot -> device, 0 = free
+	CMouseDevice * volatile m_pMice[MAX_INPUTS];
+	unsigned	m_nUSBLogFlushes;	// hot-plug log writes so far
+	volatile bool	m_bUSBRemoved;		// set by the removed handlers
 
 	u8		*m_pROM;
 	FIL		m_DiskFile;

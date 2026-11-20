@@ -591,7 +591,7 @@ void CKernel::SetupDisplay (void)
 	}
 	unsigned nW = EMU_SCREEN_WIDTH * m_nScale;
 	unsigned nH = EMU_SCREEN_HEIGHT * m_nScale;
-	m_nOffX = nW < m_nFBWidth  ? (m_nFBWidth - nW) / 2 : 0;
+	m_nOffX = nW < m_nFBWidth  ? ((m_nFBWidth - nW) / 2) & ~1u : 0;	// even: aligned rows
 	m_nOffY = nH < m_nFBHeight ? (m_nFBHeight - nH) / 2 : 0;
 
 	Say ("Screen: %ux%u, %u bpp, Mac at %ux scale", m_nFBWidth, m_nFBHeight,
@@ -633,11 +633,22 @@ void CKernel::Blit (bool bForce)
 		}
 		memcpy (pShadow, pSrc, EMU_SCREEN_STRIDE);
 
-		u8 *pLine = m_pFB + (m_nOffY + y * m_nScale) * m_nFBPitch + m_nOffX * nBytesPP;
+		// Build the scaled row in ordinary RAM, then copy it to the screen.
+		// Never write pixels straight into the framebuffer: at odd scales
+		// the compiler packs two 16-bit pixels into one 32-bit store, which
+		// lands on a 2-byte boundary every other time.  The Pi 1/Zero's
+		// ARM11 faults on misaligned stores to screen memory (Zero W crash
+		// at 3x, 2026-11-20); newer cores and QEMU don't.  RAM is fine.
+		static u32 LineBuf[4096] __attribute__((aligned(64)));	// 16 KB
+		unsigned nLineBytes = nCols * m_nScale * nBytesPP;
+		if (nLineBytes > sizeof LineBuf)
+		{
+			continue;	// wider than 4096 px at 32 bpp: not drawn
+		}
 
 		if (nBytesPP == 2)
 		{
-			u16 *pOut = (u16 *) pLine;
+			u16 *pOut = (u16 *) LineBuf;
 			for (unsigned x = 0; x < nCols; x++)
 			{
 				u16 Colour = (pSrc[x >> 3] & (0x80 >> (x & 7))) ? 0x0000 : 0xFFFF;
@@ -649,7 +660,7 @@ void CKernel::Blit (bool bForce)
 		}
 		else if (nBytesPP == 4)
 		{
-			u32 *pOut = (u32 *) pLine;
+			u32 *pOut = LineBuf;
 			for (unsigned x = 0; x < nCols; x++)
 			{
 				u32 Colour = (pSrc[x >> 3] & (0x80 >> (x & 7))) ? 0xFF000000 : 0xFFFFFFFF;
@@ -664,10 +675,12 @@ void CKernel::Blit (bool bForce)
 			continue;	// 8 bpp not supported (Circle default is 16)
 		}
 
-		// Repeat the line for vertical scaling
-		for (unsigned s = 1; s < m_nScale; s++)
+		// One copy per screen row (also the vertical scaling); the row
+		// start is 4-byte aligned (pitch and m_nOffX are kept even)
+		u8 *pLine = m_pFB + (m_nOffY + y * m_nScale) * m_nFBPitch + m_nOffX * nBytesPP;
+		for (unsigned s = 0; s < m_nScale; s++)
 		{
-			memcpy (pLine + s * m_nFBPitch, pLine, nCols * m_nScale * nBytesPP);
+			memcpy (pLine + s * m_nFBPitch, LineBuf, nLineBytes);
 		}
 	}
 }

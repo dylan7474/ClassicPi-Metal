@@ -133,6 +133,8 @@ CKernel::CKernel (void)
 	m_LogTee (&mSerial),
 	m_bSDOK (false),
 	m_bScreenOK (false),
+	m_bScaleFallback (false),
+	m_bTraceBlit (false),
 	m_nUSBLogFlushes (0),
 	m_bUSBRemoved (false),
 	m_pROM (0),
@@ -199,6 +201,7 @@ bool CKernel::Initialize (void)
 	}
 	snprintf (m_SpeedFile, sizeof m_SpeedFile, "SD:/speed-%s.txt", Tag);
 	snprintf (m_BootLogFile, sizeof m_BootLogFile, "SD:/bootlog-%s.txt", Tag);
+	snprintf (m_StageFile, sizeof m_StageFile, "SD:/stage-%s.txt", Tag);
 
 	// The core's printf/fprintf go to the UART, never onto the Mac screen
 	if (m_SerialConsole.Initialize ())
@@ -279,6 +282,39 @@ void CKernel::PanicHandler (void)
 		bOnce = true;
 		s_pThis->FlushBootLog ();
 	}
+}
+
+void CKernel::WriteStage (const char *pText)
+{
+	if (!m_bSDOK)
+	{
+		return;
+	}
+	FIL File;
+	if (f_open (&File, m_StageFile, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK)
+	{
+		UINT nWritten;
+		f_write (&File, pText, strlen (pText), &nWritten);
+		f_close (&File);
+	}
+}
+
+bool CKernel::ReadStage (char *pBuffer, unsigned nSize)
+{
+	if (!m_bSDOK)
+	{
+		return false;
+	}
+	FIL File;
+	if (f_open (&File, m_StageFile, FA_READ) != FR_OK)
+	{
+		return false;
+	}
+	UINT nRead = 0;
+	f_read (&File, pBuffer, nSize - 1, &nRead);
+	f_close (&File);
+	pBuffer[nRead] = '\0';
+	return nRead > 0;
 }
 
 void CKernel::FlushBootLog (void)
@@ -504,6 +540,28 @@ void CKernel::SetupDisplay (void)
 		}
 		Log ("Screen: macscale=%u in cmdline.txt -> %ux", nWanted, m_nScale);
 	}
+
+	// Safety net: SD:/stage-<board>.txt says how the last boot went.
+	//   "drawing N"           it never finished drawing at N: use N-1
+	//   "ok N fallback"       a fallback to N worked: stay at N
+	// Delete the file to try the largest scale again.
+	char Stage[32];
+	unsigned nLast;
+	if (ReadStage (Stage, sizeof Stage) && sscanf (Stage, "%*s %u", &nLast) == 1)
+	{
+		bool bDrawing = strncmp (Stage, "drawing", 7) == 0;
+		bool bFallback = strstr (Stage, "fallback") != 0;
+		unsigned nUse = bDrawing ? (nLast > 1 ? nLast - 1 : 1)
+			      : (bFallback ? nLast : m_nScale);
+		if (nUse < m_nScale)
+		{
+			Log ("Screen: last boot %s at %ux -> using %ux (delete %s to retry)",
+			     bDrawing ? "never finished drawing" : "fell back", nLast, nUse,
+			     m_StageFile + 4);
+			m_nScale = nUse;
+			m_bScaleFallback = true;
+		}
+	}
 	unsigned nW = EMU_SCREEN_WIDTH * m_nScale;
 	unsigned nH = EMU_SCREEN_HEIGHT * m_nScale;
 	m_nOffX = nW < m_nFBWidth  ? (m_nFBWidth - nW) / 2 : 0;
@@ -535,6 +593,11 @@ void CKernel::Blit (bool bForce)
 
 	for (unsigned y = 0; y < nRows; y++)
 	{
+		if (m_bTraceBlit && y % 57 == 0)
+		{
+			Log ("Mac:  first frame, row %u of %u", y, nRows);
+			FlushBootLog ();
+		}
 		const u8 *pSrc = pMac + y * EMU_SCREEN_STRIDE;
 		u8 *pShadow = s_Shadow + y * EMU_SCREEN_STRIDE;
 		if (!bForce && memcmp (pSrc, pShadow, EMU_SCREEN_STRIDE) == 0)
@@ -867,10 +930,24 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 	// From here the screen belongs to the Mac
 	if (m_bScreenOK)
 	{
+		// Record the scale we're about to draw at; if this boot hangs, the
+		// next one sees "drawing N" and falls back (see SetupDisplay)
+		char Stage[32];
+		snprintf (Stage, sizeof Stage, "drawing %u%s\r\n", m_nScale,
+			  m_bScaleFallback ? " fallback" : "");
+		WriteStage (Stage);
+
+		Log ("Mac:  clearing the text screen");
+		FlushBootLog ();
 		static const char ClearScreen[] = "\x1b[H\x1b[J\x1b[?25l";
 		mScreen.Write (ClearScreen, sizeof ClearScreen - 1);
+		Log ("Mac:  drawing the first frame");
+		FlushBootLog ();
+
 		u64 nStart = CTimer::GetClockTicks64 ();
+		m_bTraceBlit = true;		// progress marks while drawing it
 		Blit (true);
+		m_bTraceBlit = false;
 		Log ("Mac:  first frame drawn in %u ms",
 		     (unsigned) ((CTimer::GetClockTicks64 () - nStart) / 1000));
 		FlushBootLog ();
@@ -933,6 +1010,13 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 				Log ("Mac:  running (first second: %u slices = %u ms of Mac time)",
 				     nSlices, nSlices * emu_slice_us () / 1000);
 				FlushBootLog ();
+				if (m_bScreenOK)
+				{
+					char Stage[32];
+					snprintf (Stage, sizeof Stage, "ok %u%s\r\n", m_nScale,
+						  m_bScaleFallback ? " fallback" : "");
+					WriteStage (Stage);
+				}
 			}
 		}
 

@@ -43,6 +43,8 @@ private:
 	void Fatal (const char *pFormat, ...);	// say, flush the log, then stop for good
 	void FlushBootLog (void);		// rewrite SD:/bootlog.txt from RAM
 	static void PanicHandler (void);	// Circle panic: save the log once
+	void WriteStage (const char *pText);	// SD:/stage-<board>.txt
+	bool ReadStage (char *pBuffer, unsigned nSize);
 	void LogBoard (void);
 	bool LoadROM (void);
 	bool OpenDisk (void);
@@ -72,9 +74,12 @@ private:
 	// "Raspberry Pi Zero 2 W" -> SD:/speed-zero-2-w.txt, SD:/bootlog-zero-2-w.txt
 	char		m_SpeedFile[64];
 	char		m_BootLogFile[64];
+	char		m_StageFile[64];	// how far the last boot got drawing
 
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started
+	bool		m_bScaleFallback;	// scale lowered after a hung boot
+	bool		m_bTraceBlit;		// log progress while drawing
 
 	CUSBKeyboardDevice * volatile m_pKeyboards[MAX_INPUTS];	// slot -> device, 0 = free
 	CMouseDevice * volatile m_pMice[MAX_INPUTS];

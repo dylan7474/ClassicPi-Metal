@@ -82,6 +82,11 @@ every screen accepts it, and the Pi 5 ignores them.
 `cmdline.txt` to draw the Mac smaller than the largest scale that fits,
 e.g. `logdev=ttyS1 loglevel=4 macscale=2`.
 
+**Automatic fallback:** before drawing the Mac, each board writes
+`stage-<board>.txt` (`drawing N`). If a boot hangs there, the next boot
+draws one size smaller and logs why; once that works it stays there
+(`ok N fallback`). Delete the file to try the largest size again.
+
 **Never add `gpu_mem=16`.** It makes the firmware look for the cut-down
 `start_cd.elf` / `start4cd.elf`, which aren't on the card, and the Pi then
 doesn't boot at all (no picture, not even the rainbow square). Version

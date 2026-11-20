@@ -49,6 +49,11 @@ STDLIB    = libs/circle-stdlib
 UMAC      = external/umac
 MUSASHI   = $(UMAC)/external/Musashi
 
+# Parts of circle-stdlib we never build (~310 MB of each 477 MB copy):
+# networking, TLS, JSON, test framework and the LVGL graphics add-on.
+STDLIB_UNUSED = --exclude=/libs/mongoose/ --exclude=/libs/mbedtls/ --exclude=/libs/json/ \
+		--exclude=/libs/doctest/ --exclude=/libs/circle/addon/lvgl/
+
 # Copies keep their build output (excluded files are never deleted)
 RSYNC_SRC = rsync -a --delete --exclude=.git --exclude='*.o' --exclude='*.d' \
 		--exclude='*.elf' --exclude='*.img' --exclude='*.map' --exclude='*.lst'
@@ -69,7 +74,7 @@ build/$(1)/circle-stdlib/install/$($(1)_ARCH)/lib/libc.a: | submodules
 	mkdir -p build/$(1)
 	rsync -a --exclude=.git --exclude=/build/ --exclude=/install/ \
 		--exclude='*.o' --exclude='*.d' --exclude='*.a' --exclude=Config.mk \
-		--exclude=Config2.mk $(STDLIB)/ build/$(1)/circle-stdlib/
+		--exclude=Config2.mk $(STDLIB_UNUSED) $(STDLIB)/ build/$(1)/circle-stdlib/
 	mkdir -p build/$(1)/circle-stdlib/build/circle-newlib build/$(1)/circle-stdlib/install
 	cd build/$(1)/circle-stdlib && ./configure -r $($(1)_RASPPI) -p $($(1)_PREFIX) && $$(MAKE)
 

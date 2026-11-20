@@ -3,17 +3,20 @@
 A Macintosh Plus running bare-metal on a Raspberry Pi, with no Linux
 underneath. It powers on straight into the Mac.
 
-| Pi | Kernel | Tested in QEMU |
+| Pi | Kernel | Status |
 |---|---|---|
-| Zero, Zero W, Pi 1 | `kernel.img` (32-bit, ARMv6) | Boots System 7.0.1 (`raspi0`) |
-| Pi 2 | `kernel7.img` (32-bit, ARMv7) | Can't test: QEMU's `raspi2b` shows nothing, even for Circle's own samples |
-| Zero 2 W, Pi 3B / 3B+ / 3A+ | `kernel8.img` (64-bit) | Boots System 7.0.1 (`raspi3b`) |
-| Pi 4, Pi 400 | `kernel8-rpi4.img` (64-bit) + `armstub8-rpi4.bin` | Starts, then can't open the SD card in QEMU's `raspi4b` (QEMU or us: unknown) |
-| Pi 5, Pi 500 | `kernel_2712.img` (64-bit) | No QEMU model |
+| **Zero W** | `kernel.img` (32-bit, ARMv6) | **Works on real hardware.** 3.44x a real Mac Plus (measured at 2x scale) |
+| Zero, Pi 1 | `kernel.img` | Same kernel as the Zero W; not tried on the boards |
+| **Zero 2 W** | `kernel8.img` (64-bit) | **Works on real hardware.** About 6.9x a real Mac Plus at 3x (first 10 s reading) |
+| Pi 3B / 3B+ / 3A+ | `kernel8.img` | Same kernel as the Zero 2 W; boots in QEMU (`raspi3b`), not tried on a board |
+| Pi 2 | `kernel7.img` (32-bit, ARMv7) | Not tried on a board; QEMU's `raspi2b` shows nothing, even for Circle's own samples |
+| Pi 4, Pi 400 | `kernel8-rpi4.img` (64-bit) + `armstub8-rpi4.bin` | Not tried on a board; in QEMU's `raspi4b` it can't open the SD card, and neither can Circle's own SD sample (a QEMU limit) |
+| Pi 5, Pi 500 | `kernel_2712.img` (64-bit) | Not tried; no QEMU model |
 
 One universal card carries every kernel, and the firmware picks the right
-one for the board (see `sdcard/config.txt`). None of them has been tried on
-real hardware yet.
+one for the board (see `sdcard/config.txt`). On 2026-11-20 the same card
+booted System 7.0.1 to the Finder on a Zero W and a Zero 2 W, at 3x on a
+1080p screen, with a USB keyboard and mouse through an unpowered hub.
 
 It uses Matt Evans' [umac](https://github.com/evansm7/umac) emulator (Musashi
 68000 core) on [Circle](https://github.com/rsta2/circle) through
@@ -21,11 +24,11 @@ It uses Matt Evans' [umac](https://github.com/evansm7/umac) emulator (Musashi
 bare-metal milestone of [ClassicPi](https://github.com/dylan7474/ClassicPi),
 which runs Mini vMac on a Buildroot Linux image.
 
-**What works now** (in QEMU):
+**What works now** (on a Zero W and Zero 2 W; also in QEMU):
 
 - System 7.0.1 boots to the Finder from a 200 MB disk image, with 4 MB of Mac RAM.
 - HDMI output: the 512x342 screen is scaled by the largest whole number
-  that fits and centred on black (2x on a 1024x768 panel).
+  that fits and centred on black (3x on 1080p, 2x on a 1024x768 panel).
 - USB keyboard and mouse, plugged in at any time, directly or through a hub.
   Up to four keyboards and four mice at once (many keyboards and wireless
   receivers show up as more than one device). Plugging in and unplugging are
@@ -193,7 +196,7 @@ the screen rows that changed.
 
 ## Roadmap
 
-1. **First boot on real hardware:** a Zero 2 W, then a Zero W. Check speed (the Zero W's single 1 GHz ARM11 is the slowest), mouse feel and SD write behaviour.
+1. ~~**First boot on real hardware**~~: done 2026-11-20 on a Zero W and a Zero 2 W (see the table at the top). Still to check: speed at 3x on the Zero W, mouse feel, and long-term SD write behaviour.
 2. **Universal card on real boards:** every kernel is built and on the card. The Pi 2, 4 and 5 kernels can't be fully tested in QEMU, so each needs a first boot on a real board. On the Pi 4, check the SD card first (QEMU couldn't open it).
 3. **Speed**, if it needs it: run the blit on a second core, and mark the hot 68000 opcodes (`tools/fn_hot200.txt` in umac).
 4. **Sound:** the Mac Plus sound buffer to PWM or I2S audio (the Phonosphere MAX98357A amp would do). umac has no sound yet, so this needs work in the core.
@@ -204,6 +207,30 @@ the screen rows that changed.
    - *USB floppy drive (cheap, easiest).* These read only 1.44 MB MFM disks, and Circle seems to support only bulk-only USB storage (`umsd`), while many floppy drives use the older CBI protocol, so **check a drive before buying**. A Mac Plus can't read 1.44 MB disks itself, but umac's disk driver doesn't care, so an HFS 1.44 MB floppy (written by a later Mac or a PC tool) could be mounted as the second drive.
    - *Original 400K/800K Mac disks.* These are GCR, recorded at varying speeds, and a USB floppy drive can't read them at all. That needs a flux reader (Greaseweazle, FluxEngine or Applesauce) with a real 3.5" drive: read the flux, decode GCR to a disk image, then mount it. It's a bigger job, but it would let the Pi boot genuine old Mac floppies.
 9. **The ClassicPi case** with a Zero 2 W inside, and a floppy slot.
+
+## Lessons from real hardware
+
+QEMU runs the kernels directly. It never runs the Pi firmware, never reads
+`config.txt`, and allows things the real chips don't. The first real boots
+(2026-11-20) found three problems QEMU couldn't:
+
+1. **No picture at all, on every board:** `config.txt` had `gpu_mem=16`,
+   which makes the firmware load the cut-down `start_cd.elf`, which isn't
+   on the card. Check every `config.txt` line against the Raspberry Pi
+   documentation before trusting a card.
+2. **Mac smaller than it should be:** on a 1080p screen the firmware kept a
+   TV border (overscan) and gave 1824x984, so only a 2x Mac fitted.
+   `disable_overscan=1` fixed it (3x).
+3. **Zero W crash at 3x:** a data abort with an alignment fault
+   (`FSR 0x001`) in the screen drawing. The compiler packed two 16-bit
+   pixels into one 32-bit store, and at an odd scale every other store
+   was misaligned. The Zero W's ARM11 faults on misaligned stores to
+   screen memory; the Zero 2 W and QEMU don't. Rows are now built in RAM
+   and copied whole. Never write pixels straight into the framebuffer from
+   a loop the compiler can vectorise.
+
+The on-screen crash message (added while chasing number 3) and the
+per-board `bootlog-<board>.txt` are what found these. Keep them.
 
 ## Licence
 

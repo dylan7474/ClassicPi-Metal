@@ -3,7 +3,7 @@ CIRCLESTDLIB ?= $(TARGET_STDLIB)
 include $(CIRCLESTDLIB)/Config.mk
 
 BII  = $(BASILISK)
-UMAC = /home/djones/src/dylan7474/ClassicPi-Metal/external/umac
+UMAC = $(CURDIR)/../../external/umac
 MUS  = $(UMAC)/external/Musashi
 
 UAE_OBJS = uae/newcpu.o uae/readcpu.o uae/memory.o uae/cpudefs.o uae/cpuemu.o uae/cpustbl.o uae/cpufunctbl.o uae/fpu_ieee.o uae/stubs.o

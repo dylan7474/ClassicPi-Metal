@@ -17,9 +17,16 @@
 #include <circle/synchronize.h>
 #include <circle/timer.h>
 #include <circle/util.h>
+#include <circle/net/dnsclient.h>
+#include <circle/net/ntpclient.h>
+#include <circle/net/ipaddress.h>
+#include <circle/sched/task.h>
+#include <circle/string.h>
 #include <circle_glue.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 #define FROM		"cpmetal"
 #define VERSION		"0.1.0"
@@ -131,6 +138,13 @@ CKernel::CKernel (void)
 	m_EMMC (&mInterrupt, &mTimer, &mActLED),
 	m_SerialConsole (&mSerial, &mSerial),
 	m_LogTee (&mSerial),
+	m_pWLAN (0),
+	m_pNet (0),
+	m_pWPASupplicant (0),
+	m_bNetActive (false),
+	m_nNetStart (0),
+	m_bClockDirty (false),
+	m_nClockChanged (0),
 	m_bSDOK (false),
 	m_bScreenOK (false),
 	m_bScaleFallback (false),
@@ -402,6 +416,265 @@ void CKernel::Fatal (const char *pFormat, ...)
 		CTimer::SimpleMsDelay (200);
 		mActLED.Off ();
 		CTimer::SimpleMsDelay (800);
+	}
+}
+
+// ---- Clock + PRAM -----------------------------------------------------------
+// SD:/pram.dat keeps the Mac's 20 bytes of PRAM (its control-panel settings)
+// and the clock: "CPMR", seconds (big-endian, Mac time), PRAM.  The Pi has
+// no clock of its own, so without Wi-Fi the Mac starts at the time last
+// saved (or the build time); with Wi-Fi, NTP corrects it a few seconds in.
+
+#define CLOCK_FILE	"SD:/pram.dat"
+#define CLOCK_SAVE_US	2000000		// save 2 s after the Mac stops writing
+#define WIFI_CONFIG	"SD:/wpa_supplicant.conf"
+#define WIFI_FIRMWARE	"SD:/firmware/"
+#define HOSTNAME	"classicpi"
+#define NET_GIVE_UP_US	120000000	// stop the network after 2 min without time
+#define NET_YIELD_US	10000		// give the network tasks a turn every 10 ms
+
+static volatile bool s_bClockChanged;
+
+extern "C" void hal_rtc_changed (void)
+{
+	s_bClockChanged = true;		// picked up by the main loop
+}
+
+// Days from 1 Jan 1970 for a civil date (Howard Hinnant's algorithm)
+static long DaysFromCivil (int y, unsigned m, unsigned d)
+{
+	y -= m <= 2;
+	long era = (y >= 0 ? y : y - 399) / 400;
+	unsigned yoe = (unsigned) (y - era * 400);
+	unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+	unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return era * 146097 + (long) doe - 719468;
+}
+
+static u32 MacSecondsFromLocal (int y, unsigned m, unsigned d, unsigned h, unsigned mi, unsigned s)
+{
+	long nDays = DaysFromCivil (y, m, d) - DaysFromCivil (1904, 1, 1);
+	return (u32) (nDays * 86400L + h * 3600 + mi * 60 + s);
+}
+
+// UTC (Unix seconds) -> Mac seconds, local time per TZ (cmdline tz=)
+u32 CKernel::UnixToMac (unsigned nUnix)
+{
+	time_t t = (time_t) nUnix;
+	struct tm *pTm = localtime (&t);
+	return MacSecondsFromLocal (pTm->tm_year + 1900, pTm->tm_mon + 1, pTm->tm_mday,
+				    pTm->tm_hour, pTm->tm_min, pTm->tm_sec);
+}
+
+// The build time (__DATE__ "Nov 20 2026", __TIME__ "18:20:00"), as a start
+// for a card that has never been told the time
+static u32 BuildTimeMac (void)
+{
+	static const char Months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+	const char *pDate = __DATE__, *pTime = __TIME__;
+	unsigned m = 1;
+	for (unsigned i = 0; i < 12; i++)
+	{
+		if (strncmp (pDate, Months + 3 * i, 3) == 0)
+		{
+			m = i + 1;
+		}
+	}
+	return MacSecondsFromLocal (atoi (pDate + 7), m, atoi (pDate + 4),
+				    atoi (pTime), atoi (pTime + 3), atoi (pTime + 6));
+}
+
+static void MacTimeText (u32 nMac, char *pBuf, size_t nSize)
+{
+	u32 nDays = nMac / 86400, nRest = nMac % 86400;
+	time_t t = (time_t) (nDays - 24107) * 86400;	// 1904 -> 1970 is 24107 days
+	struct tm *pTm = gmtime (&t);			// date part only
+	snprintf (pBuf, nSize, "%04u-%02u-%02u %02u:%02u:%02u",
+		  (unsigned) (pTm->tm_year + 1900) % 10000, (unsigned) (pTm->tm_mon + 1) % 100,
+		  (unsigned) pTm->tm_mday % 100, (nRest / 3600) % 100, nRest / 60 % 60, nRest % 60);
+}
+
+void CKernel::LoadClock (void)
+{
+	u8 Buf[4 + 4 + EMU_PRAM_SIZE];
+	FIL File;
+	UINT nRead = 0;
+	if (   f_open (&File, CLOCK_FILE, FA_READ) == FR_OK)
+	{
+		f_read (&File, Buf, sizeof Buf, &nRead);
+		f_close (&File);
+	}
+	if (nRead == sizeof Buf && memcmp (Buf, "CPMR", 4) == 0)
+	{
+		u32 nSecs = (u32) Buf[4] << 24 | (u32) Buf[5] << 16 | (u32) Buf[6] << 8 | Buf[7];
+		emu_rtc_load (Buf + 8, nSecs);
+		char Text[48];
+		MacTimeText (nSecs, Text, sizeof Text);
+		Log ("Clock: PRAM and clock from %s (%s)", CLOCK_FILE + 4, Text);
+	}
+	else
+	{
+		emu_rtc_load (0, BuildTimeMac ());	// the ROM sets PRAM defaults
+		Log ("Clock: no %s yet; starting at the build time", CLOCK_FILE + 4);
+	}
+}
+
+void CKernel::SaveClock (void)
+{
+	if (!m_bSDOK)
+	{
+		return;
+	}
+	u8 Buf[4 + 4 + EMU_PRAM_SIZE];
+	uint32_t nSecs;
+	memcpy (Buf, "CPMR", 4);
+	emu_rtc_save (Buf + 8, &nSecs);
+	Buf[4] = nSecs >> 24; Buf[5] = nSecs >> 16; Buf[6] = nSecs >> 8; Buf[7] = nSecs;
+
+	FIL File;
+	if (f_open (&File, CLOCK_FILE, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK)
+	{
+		UINT nWritten;
+		f_write (&File, Buf, sizeof Buf, &nWritten);
+		f_close (&File);
+	}
+}
+
+// ---- Wi-Fi + NTP ---------------------------------------------------------------
+// The Mac starts straight away; this task joins Wi-Fi, asks NTP once and
+// leaves the answer for the main loop, which sets the Mac's clock.
+
+static volatile unsigned s_nNTPTime;		// Unix seconds, 0 = not yet
+static volatile bool s_bNTPDone;		// task finished (with or without time)
+
+class CTimeTask : public CTask
+{
+public:
+	CTimeTask (CNetSubSystem *pNet, const char *pServer)
+	:	m_pNet (pNet), m_pServer (pServer)
+	{
+		SetName ("ntp");
+	}
+
+	void Run (void) override
+	{
+		CScheduler *pSched = CScheduler::Get ();
+		while (!m_pNet->IsRunning ())		// Wi-Fi joined + DHCP
+		{
+			pSched->MsSleep (200);
+		}
+		CString IP;
+		m_pNet->GetConfig ()->GetIPAddress ()->Format (&IP);
+		CLogger::Get ()->Write ("cpmetal", LogNotice, "Wi-Fi: connected, IP address %s",
+					(const char *) IP);
+
+		for (unsigned nTry = 0; nTry < 5 && s_nNTPTime == 0; nTry++)
+		{
+			CIPAddress Server;
+			CDNSClient DNS (m_pNet);
+			if (DNS.Resolve (m_pServer, &Server))
+			{
+				CNTPClient NTP (m_pNet);
+				s_nNTPTime = NTP.GetTime (Server);
+			}
+			if (s_nNTPTime == 0)
+			{
+				pSched->MsSleep (2000);
+			}
+		}
+		s_bNTPDone = true;
+	}
+
+private:
+	CNetSubSystem *m_pNet;
+	const char *m_pServer;
+};
+
+// Only with SD:/wpa_supplicant.conf and a Wi-Fi chip whose firmware is in
+// SD:/firmware/; cmdline.txt wifi=off turns it off.
+void CKernel::StartWiFi (void)
+{
+	const char *pWiFi = mOptions.GetAppOptionString ("wifi", "on");
+	FILINFO Info;
+	if (strcmp (pWiFi, "off") == 0 || f_stat (WIFI_CONFIG, &Info) != FR_OK)
+	{
+		Log ("Wi-Fi: off (%s)", strcmp (pWiFi, "off") == 0 ? "wifi=off in cmdline.txt"
+							   : "no wpa_supplicant.conf on the card");
+		return;
+	}
+
+	m_pWLAN = new CBcm4343Device (WIFI_FIRMWARE);
+	if (m_pWLAN == 0 || !m_pWLAN->Initialize ())
+	{
+		Log ("Wi-Fi: no Wi-Fi chip on this board, or its firmware is not in /firmware");
+		m_pWLAN = 0;			// a half-started driver is left alone
+		return;
+	}
+	m_pNet = new CNetSubSystem (0, 0, 0, 0, HOSTNAME, NetDeviceTypeWLAN);
+	if (m_pNet == 0 || !m_pNet->Initialize (FALSE))
+	{
+		Log ("Wi-Fi: network start failed");
+		m_pNet = 0;
+		return;
+	}
+	m_pWPASupplicant = new CWPASupplicant (WIFI_CONFIG);
+	if (m_pWPASupplicant == 0 || !m_pWPASupplicant->Initialize ())
+	{
+		Log ("Wi-Fi: cannot start WPA (check %s)", WIFI_CONFIG + 4);
+		m_pWPASupplicant = 0;
+		return;
+	}
+
+	new CTimeTask (m_pNet, m_NTPServer);
+	m_bNetActive = true;
+	m_nNetStart = CTimer::GetClockTicks64 ();
+	Log ("Wi-Fi: joining; the Mac's clock is set from %s when it answers", m_NTPServer);
+}
+
+// Main loop: give the network a turn now and then until the time is in
+void CKernel::UpdateNetwork (u64 nNow)
+{
+	if (s_bClockChanged)			// the Mac wrote PRAM or its clock
+	{
+		s_bClockChanged = false;
+		m_bClockDirty = true;
+		m_nClockChanged = nNow;
+	}
+	if (m_bClockDirty && nNow - m_nClockChanged > CLOCK_SAVE_US)
+	{
+		m_bClockDirty = false;
+		SaveClock ();
+	}
+
+	if (!m_bNetActive)
+	{
+		return;
+	}
+
+	static u64 nNextYield;
+	if (nNow >= nNextYield)
+	{
+		m_Scheduler.Yield ();
+		nNextYield = CTimer::GetClockTicks64 () + NET_YIELD_US;
+	}
+
+	if (s_bNTPDone || nNow - m_nNetStart > NET_GIVE_UP_US)
+	{
+		m_bNetActive = false;		// no more turns: no cost to the Mac
+		if (s_nNTPTime != 0)
+		{
+			u32 nMac = UnixToMac (s_nNTPTime);
+			emu_set_time (nMac);
+			SaveClock ();		// next boot without Wi-Fi starts closer
+			char Text[48];
+			MacTimeText (nMac, Text, sizeof Text);
+			Log ("Clock: set from %s: %s (%s)", m_NTPServer, Text, m_TimeZone);
+		}
+		else
+		{
+			Log ("Wi-Fi: no time from %s (not joined, or no answer)", m_NTPServer);
+		}
+		FlushBootLog ();
 	}
 }
 
@@ -947,6 +1220,18 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 
 	SetupDisplay ();
 
+	// Clock: time zone, saved PRAM + clock, then Wi-Fi (in the background)
+	strncpy (m_TimeZone, mOptions.GetAppOptionString ("tz", "GMT0BST,M3.5.0/1,M10.5.0"),
+		 sizeof m_TimeZone - 1);
+	strncpy (m_NTPServer, mOptions.GetAppOptionString ("ntp", "pool.ntp.org"),
+		 sizeof m_NTPServer - 1);
+	m_TimeZone[sizeof m_TimeZone - 1] = '\0';
+	m_NTPServer[sizeof m_NTPServer - 1] = '\0';
+	setenv ("TZ", m_TimeZone, 1);
+	tzset ();
+	LoadClock ();
+	StartWiFi ();
+
 	int nResult = emu_init (m_pROM, m_bDiskOpen ? &m_DiskFile : 0, m_nDiskSize, bReadOnly);
 	if (nResult == -1)
 	{
@@ -1054,6 +1339,8 @@ CStdlibApp::TShutdownMode CKernel::Run (void)
 			s_bDiskDirty = false;
 			f_sync (&m_DiskFile);
 		}
+
+		UpdateNetwork (nNow);		// PRAM saves; Wi-Fi time while it runs
 	}
 
 	return ShutdownHalt;

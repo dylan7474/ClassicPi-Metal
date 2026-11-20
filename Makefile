@@ -54,6 +54,11 @@ MUSASHI   = $(UMAC)/external/Musashi
 STDLIB_UNUSED = --exclude=/libs/mongoose/ --exclude=/libs/mbedtls/ --exclude=/libs/json/ \
 		--exclude=/libs/doctest/ --exclude=/libs/circle/addon/lvgl/
 
+# Changes to umac, applied in this order to each target's copy (the
+# submodule stays untouched; rsync puts back the original of a patched file
+# before each build, so they apply cleanly every time).  See each patch.
+UMAC_PATCHES = patches/umac-rtc-hooks.patch
+
 # Copies keep their build output (excluded files are never deleted)
 RSYNC_SRC = rsync -a --delete --exclude=.git --exclude='*.o' --exclude='*.d' \
 		--exclude='*.elf' --exclude='*.img' --exclude='*.map' --exclude='*.lst'
@@ -88,6 +93,8 @@ build/$(1)/gen/m68kops.c: $(MUSASHI)/m68k_in.c | submodules
 $(1): build/$(1)/circle-stdlib/install/$($(1)_ARCH)/lib/libc.a build/$(1)/gen/m68kops.c
 	$(RSYNC_SRC) src/ build/$(1)/src/
 	$(RSYNC_SRC) $(UMAC)/ build/$(1)/umac/
+	for p in $(UMAC_PATCHES); do \
+		patch -s -p1 -d build/$(1)/umac < $$$$p || exit 1; done
 	$$(MAKE) -C build/$(1)/src MEMSIZE=$(MEMSIZE) \
 		CIRCLESTDLIB=../circle-stdlib UMAC=../umac GEN=../gen
 	cp build/$(1)/src/$($(1)_KERNEL) build/$($(1)_KERNEL)
@@ -118,11 +125,43 @@ build/firmware/%:
 	curl -fsSL --retry 3 --retry-all-errors -o $@.part $(FIRMWARE_URL)/$*
 	mv $@.part $@
 
-sdcard: all $(addprefix build/firmware/,$(FIRMWARE))
+# Wi-Fi chip firmware (Zero W, Zero 2 W, Pi 3, Pi 4/400, Pi 5): the files and
+# revision Circle's addon/wlan/firmware/Makefile names; on the card in firmware/.
+WLAN_FW_REV = c9d3ae6584ab79d19a4f94ccf701e888f9f87a53
+WLAN_FW_URL = https://github.com/RPi-Distro/firmware-nonfree/raw/$(WLAN_FW_REV)/debian/config/brcm80211
+# card name:source path
+WLAN_FW = brcmfmac43430-sdio.bin:cypress/cyfmac43430-sdio.bin \
+	  brcmfmac43430-sdio.txt:brcm/brcmfmac43430-sdio.txt \
+	  brcmfmac43430-sdio.clm_blob:cypress/cyfmac43430-sdio.clm_blob \
+	  brcmfmac43436-sdio.bin:brcm/brcmfmac43436-sdio.bin \
+	  brcmfmac43436-sdio.txt:brcm/brcmfmac43436-sdio.txt \
+	  brcmfmac43436-sdio.clm_blob:brcm/brcmfmac43436-sdio.clm_blob \
+	  brcmfmac43436s-sdio.bin:brcm/brcmfmac43436s-sdio.bin \
+	  brcmfmac43436s-sdio.txt:brcm/brcmfmac43436s-sdio.txt \
+	  brcmfmac43455-sdio.bin:cypress/cyfmac43455-sdio-minimal.bin \
+	  brcmfmac43455-sdio.txt:brcm/brcmfmac43455-sdio.txt \
+	  brcmfmac43455-sdio.clm_blob:cypress/cyfmac43455-sdio.clm_blob \
+	  brcmfmac43456-sdio.bin:brcm/brcmfmac43456-sdio.bin \
+	  brcmfmac43456-sdio.txt:brcm/brcmfmac43456-sdio.txt \
+	  brcmfmac43456-sdio.clm_blob:brcm/brcmfmac43456-sdio.clm_blob \
+	  brcmfmac43455-sdio.raspberrypi,5-model-b.bin:cypress/cyfmac43455-sdio-minimal.bin \
+	  brcmfmac43455-sdio.raspberrypi,5-model-b.txt:brcm/brcmfmac43455-sdio.txt \
+	  brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob:cypress/cyfmac43455-sdio.clm_blob
+WLAN_FW_FILES = $(addprefix build/wlan-firmware/,$(foreach f,$(WLAN_FW),$(firstword $(subst :, ,$(f)))))
+
+build/wlan-firmware/%:
+	mkdir -p build/wlan-firmware
+	curl -fsSL --retry 3 --retry-all-errors -o "$@.part" \
+		"$(WLAN_FW_URL)/$(word 2,$(subst :, ,$(filter $*:%,$(WLAN_FW))))"
+	mv "$@.part" "$@"
+
+sdcard: all $(addprefix build/firmware/,$(FIRMWARE)) $(WLAN_FW_FILES)
 	rm -rf build/sdcard
 	mkdir -p build/sdcard/overlays
 	cd build/firmware && cp --parents $(FIRMWARE) ../sdcard/
-	cp sdcard/config.txt sdcard/cmdline.txt build/sdcard/
+	mkdir -p build/sdcard/firmware
+	cp build/wlan-firmware/* build/sdcard/firmware/
+	cp sdcard/config.txt sdcard/cmdline.txt sdcard/wpa_supplicant.conf.example build/sdcard/
 	cp $(foreach t,$(TARGETS),build/$($(t)_KERNEL)) build/sdcard/
 	$(if $(filter pi4,$(TARGETS)),cp build/armstub8-rpi4.bin build/sdcard/)
 	@echo
@@ -134,7 +173,7 @@ clean:
 		build/$(t)/gen build/$($(t)_KERNEL)) build/armstub8-rpi4.bin
 
 distclean: clean
-	rm -rf $(foreach t,$(TARGETS),build/$(t)) build/firmware
+	rm -rf $(foreach t,$(TARGETS),build/$(t)) build/firmware build/wlan-firmware
 
 # Try it in QEMU's Raspberry Pi 3 model (make the card first with tools/qemu-sd.sh).
 # Serial output (the core's messages) goes to the terminal.

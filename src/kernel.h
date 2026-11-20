@@ -12,6 +12,10 @@
 #include <circle_stdlib_app.h>
 #include <circle/usb/usbkeyboard.h>
 #include <circle/input/mouse.h>
+#include <circle/sched/scheduler.h>
+#include <circle/net/netsubsystem.h>
+#include <wlan/bcm4343.h>
+#include <wlan/hostap/wpa_supplicant/wpasupplicant.h>
 #include <fatfs/ff.h>
 
 #define MAX_INPUTS	4	// keyboards and mice in use at once
@@ -48,6 +52,13 @@ private:
 	void LogBoard (void);
 	bool LoadROM (void);
 	bool OpenDisk (void);
+
+	// Clock + PRAM (SD:/pram.dat) and Wi-Fi time (NTP)
+	void LoadClock (void);
+	void SaveClock (void);
+	void StartWiFi (void);
+	void UpdateNetwork (u64 nNow);
+	u32 UnixToMac (unsigned nUnix);
 	void WriteSpeedFile (unsigned nPercent);
 
 	// Display
@@ -64,6 +75,7 @@ private:
 	static void MouseRemovedHandler (CDevice *pDevice, void *pContext);
 
 private:
+	CScheduler	m_Scheduler;		// first: Circle's network runs as tasks
 	CUSBHCIDevice	m_USBHCI;
 	CEMMCDevice	m_EMMC;
 	FATFS		m_FileSystem;
@@ -75,6 +87,18 @@ private:
 	char		m_SpeedFile[64];
 	char		m_BootLogFile[64];
 	char		m_StageFile[64];	// how far the last boot got drawing
+
+	// Wi-Fi (only with SD:/wpa_supplicant.conf): joins, gets the time once
+	// from NTP, then the network stops being given time
+	CBcm4343Device	*m_pWLAN;
+	CNetSubSystem	*m_pNet;
+	CWPASupplicant	*m_pWPASupplicant;
+	bool		m_bNetActive;		// main loop still yields to the network
+	u64		m_nNetStart;
+	char		m_NTPServer[64];	// cmdline.txt ntp=
+	char		m_TimeZone[64];		// cmdline.txt tz= (POSIX TZ)
+	bool		m_bClockDirty;		// PRAM/clock changed, save soon
+	u64		m_nClockChanged;
 
 	bool		m_bSDOK;		// SD card started and FAT mounted
 	bool		m_bScreenOK;		// HDMI framebuffer started

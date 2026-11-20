@@ -2,6 +2,9 @@
 # Build a flashable SD card image: tools/make-sdimage.sh [mac.rom] [disk1.dsk] [out.img]
 # With no arguments it uses local/mac.rom and local/disk1.dsk (local/ is gitignored).
 # One FAT32 partition holding build/sdcard/ (run `make sdcard` first) + ROM + disk.
+# If local/wpa_supplicant.conf exists (or WIFI_CONF=file) it goes on the card
+# as wpa_supplicant.conf: Wi-Fi + Mac clock from NTP.  The image then holds
+# your Wi-Fi password: keep it private.
 # Flash with Raspberry Pi Imager ("Use custom") or dd. Needs mtools + dosfstools.
 set -e
 ROM=${1:-local/mac.rom}
@@ -24,5 +27,10 @@ export MTOOLS_SKIP_CHECK=1
 mcopy -s -i "$OUT@@1M" build/sdcard/* ::
 mcopy -i "$OUT@@1M" "$ROM" ::mac.rom
 [ -n "$DISK" ] && mcopy -i "$OUT@@1M" "$DISK" ::disk1.dsk
+WIFI=${WIFI_CONF:-local/wpa_supplicant.conf}
+if [ -f "$WIFI" ]; then
+	mcopy -i "$OUT@@1M" "$WIFI" ::wpa_supplicant.conf
+	echo "Wi-Fi: $WIFI added (this image holds your Wi-Fi password)"
+fi
 mdir -i "$OUT@@1M" ::
 echo "Made $OUT (${SIZE} MB)"

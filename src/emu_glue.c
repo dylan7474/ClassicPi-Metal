@@ -72,9 +72,27 @@ void emu_vsync(void)
         umac_vsync_event();
 }
 
+void emu_rtc_tick(void);                   /* mac_rtc.c */
+void emu_rtc_set_seconds(uint32_t mac_seconds);
+
 void emu_1hz(void)
 {
+        emu_rtc_tick();                 /* the chip counts, then interrupts */
         umac_1hz_event();
+}
+
+void emu_set_time(uint32_t mac_seconds)
+{
+        emu_rtc_set_seconds(mac_seconds);
+
+        /* The Mac read the chip once at start-up into Time (0x20C) and
+         * counts that itself; set it too, big-endian like all Mac RAM */
+        if (mac_ram) {
+                mac_ram[0x20c] = (uint8_t)(mac_seconds >> 24);
+                mac_ram[0x20d] = (uint8_t)(mac_seconds >> 16);
+                mac_ram[0x20e] = (uint8_t)(mac_seconds >> 8);
+                mac_ram[0x20f] = (uint8_t)mac_seconds;
+        }
 }
 
 uint8_t usb_to_mac_key(uint8_t usage);   /* keymap_usb.c */

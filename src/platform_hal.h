@@ -28,6 +28,10 @@ extern "C" {
 int     hal_disk_read(void *ctx, uint8_t *buf, uint32_t offset, uint32_t len);
 int     hal_disk_write(void *ctx, const uint8_t *buf, uint32_t offset, uint32_t len);
 
+/* The Mac changed PRAM or set its clock: the platform should save them
+ * (emu_rtc_save) soon, after a quiet spell. */
+void    hal_rtc_changed(void);
+
 /* ---- Provided by the core, called by the platform -------------------- */
 
 /* rom: EMU_ROM_SIZE bytes, writable (it gets patched in place).
@@ -35,6 +39,16 @@ int     hal_disk_write(void *ctx, const uint8_t *buf, uint32_t offset, uint32_t 
  * Returns 0 on success, -1 if the ROM is not a supported one,
  * -2 if there is no memory for the Mac's RAM. */
 int     emu_init(uint8_t *rom, void *disk_ctx, uint32_t disk_size, int read_only);
+
+/* Clock chip (mac_rtc.c).  Mac time = seconds since 1 Jan 1904, local.
+ * PRAM is 20 bytes.  emu_rtc_load() before emu_init() (pram may be 0). */
+#define EMU_PRAM_SIZE           20
+void    emu_rtc_load(const uint8_t *pram20, uint32_t mac_seconds);
+void    emu_rtc_save(uint8_t *pram20, uint32_t *mac_seconds);
+uint32_t emu_rtc_seconds(void);
+/* Set the time while the Mac runs (e.g. from NTP): the clock chip and the
+ * Mac's own running clock (low-memory global Time, 0x20C). */
+void    emu_set_time(uint32_t mac_seconds);
 
 /* Run the 68000 for one quantum (about 5 ms of Mac time). */
 void    emu_run_slice(void);

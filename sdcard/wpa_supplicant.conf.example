@@ -1,0 +1,19 @@
+#
+# Wi-Fi for ClassicPi-Metal: fill in your network, then rename this file to
+# wpa_supplicant.conf.  With it the Pi joins Wi-Fi at power-on and sets the
+# Mac's clock from the internet time (NTP) a few seconds after the Mac
+# starts.  Without it the Mac's clock carries on from pram.dat.
+#
+# 2.4 GHz networks only on a Zero W / Zero 2 W / Pi 3 (5 GHz on a Pi 3B+/4).
+# WPA/WPA2 personal (a password) only.
+#
+
+country=GB
+
+network={
+	ssid="your-network-name"
+	psk="your-password"
+	proto=WPA2
+	key_mgmt=WPA-PSK
+	#scan_ssid=1		# for a hidden network
+}

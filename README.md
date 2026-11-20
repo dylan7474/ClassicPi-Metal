@@ -36,6 +36,16 @@ which runs Mini vMac on a Buildroot Linux image.
 - Reads and writes go straight to the disk image file on the SD card.
   Writes are flushed one second after the Mac stops writing.
 - If the ROM is missing or wrong, the screen says so in plain words.
+- **Clock and PRAM:** umac had no clock chip; ClassicPi-Metal adds one
+  (`src/mac_rtc.c`, wired in by `patches/umac-rtc-hooks.patch`). The Mac's
+  date and time and its 20 bytes of PRAM (control-panel settings) are kept
+  in `pram.dat` on the card.
+- **Wi-Fi time:** with a `wpa_supplicant.conf` on the card (see
+  `wpa_supplicant.conf.example`), the Pi joins Wi-Fi in the background and
+  sets the Mac's clock from NTP a few seconds after the Mac starts; the Mac
+  never waits for it. Once the time is in, the network stops being given
+  turns, so it costs the Mac nothing. Without Wi-Fi the clock carries on
+  from `pram.dat` (the Pi has no clock of its own while it's off).
 - **Per-board files:** `<board>` is the model, e.g. `zero-2-w`, `zero-w`,
   `3-model-b`, so one card can go round several boards and keep each one's
   results. Each boot of the same board overwrites its own files.
@@ -65,6 +75,9 @@ Use a FAT32 card (one partition). Run `make sdcard` and copy everything from
 | `kernel.img`, `kernel7.img`, `kernel8.img`, `kernel8-rpi4.img`, `kernel_2712.img`, `armstub8-rpi4.bin` | This program, one kernel per Pi family (see the table at the top); the armstub is Circle's Pi 4 start-up code |
 | `mac.rom` | **Yours:** a Mac Plus v3 ROM, checksum `4D1F8172`, 128 KB (`vMac.ROM` also accepted; extra bytes after 128 KB are ignored) |
 | `disk1.dsk` | **Yours:** a raw HFS disk image (`disk1.img` and `disk.dsk` also accepted) |
+| `wpa_supplicant.conf` | **Yours, optional:** your Wi-Fi name and password (copy `wpa_supplicant.conf.example`) for the Mac's clock from NTP |
+| `firmware/` | Wi-Fi chip firmware (downloaded by `make sdcard`) |
+| `pram.dat` | Written by the Pi: the Mac's PRAM settings and clock |
 | `speed-<board>.txt`, `bootlog-<board>.txt` | Written by the Pi (see below); safe to delete |
 
 The ROM and System software are Apple's copyright, so they are never in this
@@ -89,6 +102,10 @@ e.g. `logdev=ttyS1 loglevel=4 macscale=2`.
 `stage-<board>.txt` (`drawing N`). If a boot hangs there, the next boot
 draws one size smaller and logs why; once that works it stays there
 (`ok N fallback`). Delete the file to try the largest size again.
+
+**Clock options** (on the single line in `cmdline.txt`):
+`tz=` POSIX time zone, default `GMT0BST,M3.5.0/1,M10.5.0` (UK);
+`ntp=` time server, default `pool.ntp.org`; `wifi=off` to skip Wi-Fi.
 
 **Never add `gpu_mem=16`.** It makes the firmware look for the cut-down
 `start_cd.elf` / `start4cd.elf`, which aren't on the card, and the Pi then

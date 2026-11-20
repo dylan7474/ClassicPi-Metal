@@ -890,7 +890,7 @@ void CKernel::FeedSound (void)
 	static s16 Buffer[SOUND_FRAME * 2];
 	emu_sound_render (Buffer, SOUND_FRAME);
 
-	unsigned nQueued = pSound->GetQueueSizeFrames () - pSound->GetQueueFramesAvail ();
+	unsigned nQueued = pSound->GetQueueFramesAvail ();	// frames waiting to be played
 	if (nQueued > SOUND_HIGH)
 	{
 		return;				// running ahead: skip this frame

@@ -839,8 +839,9 @@ void CKernel::UpdateNetwork (u64 nNow)
 
 #define SOUND_RATE		48000
 #define SOUND_QUEUE_MS		200		// room in the queue
-#define SOUND_TARGET_FRAMES	(SOUND_RATE / 20)	// keep ~50 ms queued
-#define SOUND_MAX_WRITE		1600		// frames per call (2 video frames)
+#define SOUND_FRAME		(SOUND_RATE / 60)	// 800 per video frame, always
+#define SOUND_LOW		(2 * SOUND_FRAME)	// below this: write a frame twice
+#define SOUND_HIGH		(6 * SOUND_FRAME)	// above this: skip a frame
 
 void CKernel::StartSound (void)
 {
@@ -874,6 +875,11 @@ void CKernel::StartSound (void)
 #endif
 }
 
+// Always exactly 800 frames per video frame: 60 x 800 = 48000, so the pitch
+// never moves.  (Steering the amount per frame made a warble: the HDMI
+// driver drains the queue in ~40 ms blocks.)  The Pi's 60 Hz is a hair
+// off, so now and then a whole frame is repeated or skipped, only when
+// the queue gets near empty or full.
 void CKernel::FeedSound (void)
 {
 	if (m_pSound == 0)
@@ -881,19 +887,19 @@ void CKernel::FeedSound (void)
 		return;
 	}
 	CSoundBaseDevice *pSound = (CSoundBaseDevice *) m_pSound;
+	static s16 Buffer[SOUND_FRAME * 2];
+	emu_sound_render (Buffer, SOUND_FRAME);
+
 	unsigned nQueued = pSound->GetQueueSizeFrames () - pSound->GetQueueFramesAvail ();
-	unsigned nWrite = nQueued < SOUND_TARGET_FRAMES ? SOUND_TARGET_FRAMES - nQueued : 0;
-	if (nWrite < SOUND_RATE / 120)
+	if (nQueued > SOUND_HIGH)
 	{
-		nWrite = SOUND_RATE / 120;	// at least half a frame's worth, always
+		return;				// running ahead: skip this frame
 	}
-	if (nWrite > SOUND_MAX_WRITE)
+	pSound->Write (Buffer, sizeof Buffer);
+	if (nQueued < SOUND_LOW)
 	{
-		nWrite = SOUND_MAX_WRITE;
+		pSound->Write (Buffer, sizeof Buffer);	// running dry: once more
 	}
-	static s16 Buffer[SOUND_MAX_WRITE * 2];
-	emu_sound_render (Buffer, nWrite);
-	pSound->Write (Buffer, nWrite * 2 * sizeof (s16));
 }
 
 bool CKernel::LoadROM (void)

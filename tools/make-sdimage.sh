@@ -21,7 +21,7 @@ truncate -s ${SIZE}M "$OUT"
 echo 'start=2048, type=c, bootable' | sfdisk -q "$OUT"
 mkfs.vfat --offset 2048 -F 32 -n CLASSICPI "$OUT" >/dev/null
 export MTOOLS_SKIP_CHECK=1
-mcopy -i "$OUT@@1M" build/sdcard/* ::
+mcopy -s -i "$OUT@@1M" build/sdcard/* ::
 mcopy -i "$OUT@@1M" "$ROM" ::mac.rom
 [ -n "$DISK" ] && mcopy -i "$OUT@@1M" "$DISK" ::disk1.dsk
 mdir -i "$OUT@@1M" ::

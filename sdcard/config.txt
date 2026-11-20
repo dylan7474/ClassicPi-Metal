@@ -1,6 +1,9 @@
-# ClassicPi-Metal - one card, the firmware picks the kernel for the model.
-#   Pi Zero / Zero W / Pi 1   -> kernel.img   (32-bit, ARMv6)
-#   Pi Zero 2 W / Pi 3        -> kernel8.img  (64-bit)
+# ClassicPi-Metal - one card for every Pi; the firmware picks the kernel.
+#   Pi Zero / Zero W / Pi 1   -> kernel.img        (32-bit, ARMv6)
+#   Pi 2                      -> kernel7.img       (32-bit, ARMv7)
+#   Pi Zero 2 W / Pi 3        -> kernel8.img       (64-bit)
+#   Pi 4 / 400                -> kernel8-rpi4.img  (64-bit, with Circle's armstub)
+#   Pi 5 / 500                -> kernel_2712.img   (64-bit)
 # Later sections win, so [pi02] overrides [pi0] on a Zero 2 W.
 
 [pi0]
@@ -8,6 +11,9 @@ kernel=kernel.img
 
 [pi1]
 kernel=kernel.img
+
+[pi2]
+kernel=kernel7.img
 
 [pi02]
 arm_64bit=1
@@ -19,12 +25,25 @@ arm_64bit=1
 kernel_address=0x80000
 kernel=kernel8.img
 
+[pi4]
+arm_64bit=1
+kernel_address=0x80000
+armstub=armstub8-rpi4.bin
+kernel=kernel8-rpi4.img
+max_framebuffers=2
+
+[pi5]
+arm_64bit=1
+kernel_address=0x80000
+kernel=kernel_2712.img
+
 [all]
 initial_turbo=0
 
 # HDMI: the Mac picture is scaled by a whole number and centred.
 # 1024x768 gives a 2x Mac (1024x684) with thin black bars.
 # Remove these two lines to use the screen's own preferred mode.
+# (The Pi 5 ignores them and uses the screen's preferred mode.)
 hdmi_group=2
 hdmi_mode=16
 

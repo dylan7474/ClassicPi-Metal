@@ -60,27 +60,52 @@ static bool SendText (CSocket *pSocket, const char *pText)
 	return SendAll (pSocket, pText, strlen (pText));
 }
 
+// Circle's Receive() hands over one whole TCP segment and drops what doesn't
+// fit, so always receive into a full frame here and hand it out from that
+// (one client at a time: a single staging buffer, reset per connection).
+static u8 s_Stage[FRAME_BUFFER_SIZE];
+static unsigned s_nStagePos, s_nStageLen;
+
 // Receive up to nSize bytes; 0 = nothing for IDLE_TIMEOUT_MS, <0 = closed
 static int ReceiveSome (CSocket *pSocket, void *pBuffer, unsigned nSize)
 {
-	unsigned nStart = CTimer::Get ()->GetTicks ();
-	while (1)
+	if (s_nStagePos >= s_nStageLen)
 	{
-		int n = pSocket->Receive (pBuffer, nSize, MSG_DONTWAIT);
-		if (n != 0)
+		unsigned nStart = CTimer::Get ()->GetTicks ();
+		while (1)
 		{
-			return n;
+			int n = pSocket->Receive (s_Stage, sizeof s_Stage, MSG_DONTWAIT);
+			if (n < 0)
+			{
+				return n;
+			}
+			if (n > 0)
+			{
+				s_nStagePos = 0;
+				s_nStageLen = (unsigned) n;
+				break;
+			}
+			if (CTimer::Get ()->GetTicks () - nStart > IDLE_TIMEOUT_MS * HZ / 1000)
+			{
+				return 0;
+			}
+			CScheduler::Get ()->MsSleep (1);
 		}
-		if (CTimer::Get ()->GetTicks () - nStart > IDLE_TIMEOUT_MS * HZ / 1000)
-		{
-			return 0;
-		}
-		CScheduler::Get ()->MsSleep (1);
 	}
+
+	unsigned n = s_nStageLen - s_nStagePos;
+	if (n > nSize)
+	{
+		n = nSize;
+	}
+	memcpy (pBuffer, s_Stage + s_nStagePos, n);
+	s_nStagePos += n;
+	return (int) n;
 }
 
 static void Respond (CSocket *pSocket, unsigned nStatus, const char *pReason, const char *pText)
 {
+	CLogger::Get ()->Write (FROM, LogNotice, "-> %u %s", nStatus, pReason);
 	CString Head;
 	Head.Format ("HTTP/1.0 %u %s\r\nContent-Type: text/plain; charset=utf-8\r\n"
 		     "Content-Length: %u\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -497,6 +522,7 @@ static void Serve (CSocket *pSocket)
 	static u8 Request[8192];
 	unsigned nHave = 0;
 	char *pBodyStart = 0;
+	s_nStagePos = s_nStageLen = 0;		// a new connection
 
 	while (pBodyStart == 0)
 	{
@@ -525,6 +551,8 @@ static void Serve (CSocket *pSocket)
 		Respond (pSocket, 400, "Bad Request", "Bad request.");
 		return;
 	}
+
+	CLogger::Get ()->Write (FROM, LogNotice, "%s %s", Method, RawPath);
 
 	unsigned nLength = 0;
 	for (char *p = (char *) Request; (p = strchr (p, '\n')) != 0; )
@@ -646,11 +674,17 @@ void CWebTask::Run (void)
 		CScheduler::Get ()->MsSleep (200);
 	}
 
-	CSocket Listen (m_pNet, IPPROTO_TCP);
-	if (Listen.Bind ((u16) m_nPort) < 0 || Listen.Listen (2) < 0)
+	CSocket *pListen = 0;
+	while (pListen == 0)
 	{
-		CLogger::Get ()->Write (FROM, LogError, "cannot listen on port %u", m_nPort);
-		return;
+		pListen = new CSocket (m_pNet, IPPROTO_TCP);
+		if (pListen->Bind ((u16) m_nPort) < 0 || pListen->Listen (4) < 0)
+		{
+			CLogger::Get ()->Write (FROM, LogError, "cannot listen on port %u", m_nPort);
+			delete pListen;
+			pListen = 0;
+			CScheduler::Get ()->MsSleep (2000);
+		}
 	}
 
 	CString IP;
@@ -662,10 +696,23 @@ void CWebTask::Run (void)
 	{
 		CIPAddress Client;
 		u16 usPort;
-		CSocket *pClient = Listen.Accept (&Client, &usPort);
+		CSocket *pClient = pListen->Accept (&Client, &usPort);
 		if (pClient == 0)
 		{
-			CScheduler::Get ()->MsSleep (200);
+			// The listening socket failed: start a new one
+			CLogger::Get ()->Write (FROM, LogWarning, "accept failed; listening again");
+			delete pListen;
+			pListen = 0;
+			while (pListen == 0)
+			{
+				CScheduler::Get ()->MsSleep (200);
+				pListen = new CSocket (m_pNet, IPPROTO_TCP);
+				if (pListen->Bind ((u16) m_nPort) < 0 || pListen->Listen (4) < 0)
+				{
+					delete pListen;
+					pListen = 0;
+				}
+			}
 			continue;
 		}
 		g_Web.nRequests++;
